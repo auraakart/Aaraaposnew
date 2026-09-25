@@ -1,4 +1,4 @@
-export type PaymentMethod = "cash" | "upi" | "card";
+export type PaymentMethod = "cash" | "upi" | "card" | "customer_credit";
 export type PaymentStatus =
   | "pending"
   | "authorized"
@@ -64,6 +64,7 @@ export function validateSplitPayment(
 
     if (
       allocation.method !== "cash" &&
+      allocation.method !== "customer_credit" &&
       allocation.status === "captured" &&
       (!allocation.provider || !allocation.providerReference)
     ) {
