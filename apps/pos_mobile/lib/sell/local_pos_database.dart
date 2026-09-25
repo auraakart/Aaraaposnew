@@ -5,6 +5,7 @@ import 'package:sqflite/sqflite.dart';
 import 'package:uuid/uuid.dart';
 
 import '../customers/customer_domain.dart';
+import '../intelligence/owner_intelligence.dart';
 import '../inventory/inventory_domain.dart';
 import '../operations/operations_domain.dart';
 import '../purchases/purchase_domain.dart';
@@ -1982,6 +1983,401 @@ class LocalPosDatabase {
       "SELECT COUNT(*) AS count FROM approval_request WHERE status = 'pending'",
     );
     return (rows.single['count'] as int?) ?? 0;
+  }
+
+  Future<BusinessMetrics> businessMetrics(
+    ReportPeriod period, {
+    DateTime? now,
+  }) async {
+    final reference = now ?? DateTime.now();
+    final range = periodRange(period, reference);
+    final start = range.start.toUtc().toIso8601String();
+    final end = range.end.toUtc().toIso8601String();
+    final previousStart =
+        range.start.subtract(const Duration(days: 7)).toUtc().toIso8601String();
+    final previousEnd =
+        range.end.subtract(const Duration(days: 7)).toUtc().toIso8601String();
+
+    final salesRows = await _database.rawQuery(
+      '''
+      SELECT
+        COUNT(*) AS bills,
+        COALESCE(SUM(total_minor), 0) AS sales_minor
+      FROM sale
+      WHERE status = 'finalized'
+        AND local_created_at >= ?
+        AND local_created_at < ?
+      ''',
+      [start, end],
+    );
+    final salesMinor = salesRows.single['sales_minor']! as int;
+    final billCount = salesRows.single['bills']! as int;
+
+    final paymentRows = await _database.rawQuery(
+      '''
+      SELECT COALESCE(SUM(p.amount_minor), 0) AS received_minor
+      FROM payment p
+      INNER JOIN sale s ON s.id = p.sale_id
+      WHERE p.status = 'captured'
+        AND p.method <> 'customer_credit'
+        AND s.local_created_at >= ?
+        AND s.local_created_at < ?
+      ''',
+      [start, end],
+    );
+    final collectionRows = await _database.rawQuery(
+      '''
+      SELECT COALESCE(SUM(amount_minor), 0) AS received_minor
+      FROM customer_credit_entry
+      WHERE entry_type = 'payment'
+        AND occurred_at >= ?
+        AND occurred_at < ?
+      ''',
+      [start, end],
+    );
+    final moneyReceivedMinor =
+        (paymentRows.single['received_minor']! as int) +
+        (collectionRows.single['received_minor']! as int);
+
+    final dueRows = await _database.rawQuery(
+      '''
+      SELECT COALESCE(
+        SUM(
+          CASE
+            WHEN entry_type IN ('charge', 'correction_increase')
+              THEN amount_minor
+            ELSE -amount_minor
+          END
+        ),
+        0
+      ) AS due_minor
+      FROM customer_credit_entry
+      ''',
+    );
+    final moneyDueMinor = dueRows.single['due_minor']! as int;
+
+    final expenseRows = await _database.rawQuery(
+      '''
+      SELECT COALESCE(SUM(amount_minor), 0) AS expense_minor
+      FROM expense
+      WHERE occurred_at >= ? AND occurred_at < ?
+      ''',
+      [start, end],
+    );
+    final expensesMinor = expenseRows.single['expense_minor']! as int;
+
+    final costRows = await _database.rawQuery(
+      '''
+      SELECT
+        sl.taxable_minor,
+        sl.quantity_milli,
+        (
+          SELECT prl.unit_cost_minor
+          FROM purchase_receipt_line prl
+          INNER JOIN purchase_receipt pr
+            ON pr.id = prl.purchase_receipt_id
+          WHERE prl.product_id = sl.product_id
+            AND pr.received_at <= s.local_created_at
+          ORDER BY pr.received_at DESC
+          LIMIT 1
+        ) AS unit_cost_minor
+      FROM sale_line sl
+      INNER JOIN sale s ON s.id = sl.sale_id
+      WHERE s.status = 'finalized'
+        AND s.local_created_at >= ?
+        AND s.local_created_at < ?
+      ''',
+      [start, end],
+    );
+
+    var taxableSalesMinor = 0;
+    var coveredTaxableMinor = 0;
+    var estimatedCostMinor = 0;
+    for (final row in costRows) {
+      final taxable = row['taxable_minor']! as int;
+      taxableSalesMinor += taxable;
+      final unitCost = row['unit_cost_minor'] as int?;
+      if (unitCost != null) {
+        coveredTaxableMinor += taxable;
+        estimatedCostMinor +=
+            (unitCost * (row['quantity_milli']! as int) + 500) ~/ 1000;
+      }
+    }
+
+    final costCoverageBps = taxableSalesMinor == 0
+        ? 10000
+        : (coveredTaxableMinor * 10000) ~/ taxableSalesMinor;
+    final estimatedProfitMinor =
+        coveredTaxableMinor == taxableSalesMinor
+            ? taxableSalesMinor - estimatedCostMinor - expensesMinor
+            : null;
+
+    final inventory = await listInventory();
+    final lowStockCount = inventory
+        .where((item) => item.health != StockHealth.healthy)
+        .length;
+
+    final previousRows = await _database.rawQuery(
+      '''
+      SELECT COALESCE(SUM(total_minor), 0) AS sales_minor
+      FROM sale
+      WHERE status = 'finalized'
+        AND local_created_at >= ?
+        AND local_created_at < ?
+      ''',
+      [previousStart, previousEnd],
+    );
+
+    final varianceRows = await _database.rawQuery(
+      '''
+      SELECT variance_minor
+      FROM shift
+      WHERE status = 'closed' AND variance_minor IS NOT NULL
+      ORDER BY closed_at DESC
+      LIMIT 1
+      ''',
+    );
+
+    return BusinessMetrics(
+      period: period,
+      salesMinor: salesMinor,
+      billCount: billCount,
+      moneyReceivedMinor: moneyReceivedMinor,
+      moneyDueMinor: moneyDueMinor < 0 ? 0 : moneyDueMinor,
+      expensesMinor: expensesMinor,
+      estimatedProfitMinor: estimatedProfitMinor,
+      lowStockCount: lowStockCount,
+      costCoverageBps: costCoverageBps,
+      previousComparableSalesMinor:
+          previousRows.single['sales_minor']! as int,
+      latestCashVarianceMinor: varianceRows.isEmpty
+          ? null
+          : varianceRows.single['variance_minor'] as int?,
+    );
+  }
+
+  Future<List<BusinessTimelineItem>> businessTimeline({
+    int limit = 30,
+  }) async {
+    final items = <BusinessTimelineItem>[];
+
+    final sales = await _database.rawQuery(
+      '''
+      SELECT invoice_number, total_minor, local_created_at
+      FROM sale
+      WHERE status = 'finalized'
+      ORDER BY local_created_at DESC
+      LIMIT ?
+      ''',
+      [limit],
+    );
+    for (final row in sales) {
+      items.add(
+        BusinessTimelineItem(
+          occurredAt: DateTime.parse(row['local_created_at']! as String),
+          title: 'Sale ${row['invoice_number']}',
+          type: 'sale',
+          amountMinor: row['total_minor']! as int,
+        ),
+      );
+    }
+
+    final expenses = await _database.rawQuery(
+      '''
+      SELECT category, amount_minor, occurred_at
+      FROM expense
+      ORDER BY occurred_at DESC
+      LIMIT ?
+      ''',
+      [limit],
+    );
+    for (final row in expenses) {
+      items.add(
+        BusinessTimelineItem(
+          occurredAt: DateTime.parse(row['occurred_at']! as String),
+          title: 'Expense • ${row['category']}',
+          type: 'expense',
+          amountMinor: row['amount_minor']! as int,
+        ),
+      );
+    }
+
+    final receipts = await _database.rawQuery(
+      '''
+      SELECT pr.total_minor, pr.received_at, s.name AS supplier_name
+      FROM purchase_receipt pr
+      INNER JOIN supplier s ON s.id = pr.supplier_id
+      ORDER BY pr.received_at DESC
+      LIMIT ?
+      ''',
+      [limit],
+    );
+    for (final row in receipts) {
+      items.add(
+        BusinessTimelineItem(
+          occurredAt: DateTime.parse(row['received_at']! as String),
+          title: 'Stock received • ${row['supplier_name']}',
+          type: 'purchase_receipt',
+          amountMinor: row['total_minor']! as int,
+        ),
+      );
+    }
+
+    final credits = await _database.rawQuery(
+      '''
+      SELECT cce.amount_minor, cce.occurred_at, c.name
+      FROM customer_credit_entry cce
+      INNER JOIN customer c ON c.id = cce.customer_id
+      WHERE cce.entry_type = 'charge'
+      ORDER BY cce.occurred_at DESC
+      LIMIT ?
+      ''',
+      [limit],
+    );
+    for (final row in credits) {
+      items.add(
+        BusinessTimelineItem(
+          occurredAt: DateTime.parse(row['occurred_at']! as String),
+          title: 'Customer credit • ${row['name']}',
+          type: 'customer_credit',
+          amountMinor: row['amount_minor']! as int,
+        ),
+      );
+    }
+
+    final shifts = await _database.rawQuery(
+      '''
+      SELECT e.name, sh.opened_at, sh.closed_at, sh.variance_minor, sh.status
+      FROM shift sh
+      INNER JOIN employee e ON e.id = sh.employee_id
+      ORDER BY sh.opened_at DESC
+      LIMIT ?
+      ''',
+      [limit],
+    );
+    for (final row in shifts) {
+      items.add(
+        BusinessTimelineItem(
+          occurredAt: DateTime.parse(row['opened_at']! as String),
+          title: 'Shift opened • ${row['name']}',
+          type: 'shift_open',
+        ),
+      );
+      if (row['closed_at'] != null) {
+        items.add(
+          BusinessTimelineItem(
+            occurredAt: DateTime.parse(row['closed_at']! as String),
+            title: 'Shift closed • ${row['name']}',
+            type: 'shift_close',
+            detail: (row['variance_minor'] as int? ?? 0) == 0
+                ? 'Cash matched'
+                : 'Cash difference recorded',
+            amountMinor: row['variance_minor'] as int?,
+          ),
+        );
+      }
+    }
+
+    items.sort((a, b) => b.occurredAt.compareTo(a.occurredAt));
+    return items.take(limit).toList();
+  }
+
+  Future<List<LocalDataQualityIssue>> dataQualityIssues() async {
+    final issues = <LocalDataQualityIssue>[];
+
+    final duplicateProducts = await _database.rawQuery(
+      '''
+      SELECT lower(trim(name)) AS normalized_name, COUNT(*) AS count
+      FROM product
+      WHERE active = 1
+      GROUP BY lower(trim(name))
+      HAVING COUNT(*) > 1
+      ''',
+    );
+    for (final row in duplicateProducts) {
+      issues.add(
+        LocalDataQualityIssue(
+          type: 'duplicate_product',
+          message:
+              'Duplicate products named "${row['normalized_name']}" may split stock and sales.',
+          repairHint: 'Review products and keep one catalogue entry.',
+          severity: DataQualitySeverity.warning,
+        ),
+      );
+    }
+
+    final missingPrices = await _database.rawQuery(
+      '''
+      SELECT name
+      FROM product
+      WHERE active = 1 AND unit_price_minor = 0
+      ORDER BY name
+      ''',
+    );
+    for (final row in missingPrices) {
+      issues.add(
+        LocalDataQualityIssue(
+          type: 'missing_price',
+          message: '${row['name']} has no selling price.',
+          repairHint: 'Set the selling price before normal billing.',
+          severity: DataQualitySeverity.critical,
+        ),
+      );
+    }
+
+    final inventory = await listInventory();
+    for (final item in inventory.where((item) => item.onHandMilli < 0)) {
+      issues.add(
+        LocalDataQualityIssue(
+          type: 'negative_stock',
+          message: '${item.name} shows stock below zero.',
+          repairHint: 'Count stock and record the actual quantity.',
+          severity: DataQualitySeverity.warning,
+        ),
+      );
+    }
+
+    final duplicateCustomers = await _database.rawQuery(
+      '''
+      SELECT mobile_e164, COUNT(*) AS count
+      FROM customer
+      WHERE mobile_e164 IS NOT NULL AND trim(mobile_e164) <> ''
+      GROUP BY mobile_e164
+      HAVING COUNT(*) > 1
+      ''',
+    );
+    for (final row in duplicateCustomers) {
+      issues.add(
+        LocalDataQualityIssue(
+          type: 'duplicate_customer',
+          message: 'More than one customer uses ${row['mobile_e164']}.',
+          repairHint: 'Review customer profiles before sending reminders.',
+          severity: DataQualitySeverity.warning,
+        ),
+      );
+    }
+
+    final incompleteSuppliers = await _database.rawQuery(
+      '''
+      SELECT name
+      FROM supplier
+      WHERE (mobile_e164 IS NULL OR trim(mobile_e164) = '')
+        AND (gstin IS NULL OR trim(gstin) = '')
+      ORDER BY name
+      ''',
+    );
+    for (final row in incompleteSuppliers) {
+      issues.add(
+        LocalDataQualityIssue(
+          type: 'incomplete_supplier',
+          message: '${row['name']} has no mobile number or GSTIN.',
+          repairHint: 'Add supplier contact or tax details when available.',
+          severity: DataQualitySeverity.info,
+        ),
+      );
+    }
+
+    return issues;
   }
 
   Future<int> pendingOutboxCount() async {
