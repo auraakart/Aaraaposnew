@@ -85,13 +85,15 @@ class OfflineReturnResult {
     required this.returnId,
     required this.returnNumber,
     required this.refundMinor,
-    required this.refundMethod,
+    required this.cashRefundMinor,
+    required this.creditReversalMinor,
   });
 
   final String returnId;
   final String returnNumber;
   final int refundMinor;
-  final RefundMethod refundMethod;
+  final int cashRefundMinor;
+  final int creditReversalMinor;
 }
 
 int prorateReturnMinor({
