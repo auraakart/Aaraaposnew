@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../accounting/accounting_export_screen.dart';
+import '../commerce/commerce_orders_screen.dart';
 import '../loyalty/loyalty_promotions_screen.dart';
 import '../multistore/store_scope_screen.dart';
 import '../operations/operations_screen.dart';
@@ -24,6 +25,29 @@ class MoreScreen extends StatelessWidget {
     return ListView(
       padding: const EdgeInsets.all(16),
       children: [
+        Card(
+          child: ListTile(
+            leading: const Icon(Icons.shopping_bag_outlined),
+            title: const Text('Commerce Orders'),
+            subtitle: const Text(
+              'Capture phone/WhatsApp orders and bill them through Sell',
+            ),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () {
+              Navigator.of(context).push(
+                MaterialPageRoute<void>(
+                  builder: (_) => Scaffold(
+                    appBar: AppBar(title: const Text('Commerce Orders')),
+                    body: CommerceOrdersScreen(
+                      database: database,
+                      saleContext: saleContext,
+                    ),
+                  ),
+                ),
+              );
+            },
+          ),
+        ),
         Card(
           child: ListTile(
             leading: const Icon(Icons.table_view_outlined),
