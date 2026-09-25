@@ -2730,78 +2730,6 @@ class LocalPosDatabase {
         normalized.contains('difference') ||
         normalized.contains('variance')) {
       final metrics = await businessMetrics(ReportPeriod.today);
-      final localGeneratedAt = generatedAt.toLocal();
-    final todayStart = DateTime(
-      localGeneratedAt.year,
-      localGeneratedAt.month,
-      localGeneratedAt.day,
-    ).toUtc();
-    final tomorrow = todayStart.add(const Duration(days: 1));
-    final priorStart = todayStart.subtract(const Duration(days: 7));
-    final refundTodayRows = await _database.rawQuery(
-      '''
-      SELECT COUNT(*) AS count, COALESCE(SUM(total_refund_minor), 0) AS amount
-      FROM sale_return
-      WHERE status = 'finalized'
-        AND returned_at >= ?
-        AND returned_at < ?
-      ''',
-      [todayStart.toIso8601String(), tomorrow.toIso8601String()],
-    );
-    final refundPriorRows = await _database.rawQuery(
-      '''
-      SELECT COUNT(*) AS count
-      FROM sale_return
-      WHERE status = 'finalized'
-        AND returned_at >= ?
-        AND returned_at < ?
-      ''',
-      [priorStart.toIso8601String(), todayStart.toIso8601String()],
-    );
-    final refundCount = refundTodayRows.single['count']! as int;
-    final refundAmount = refundTodayRows.single['amount']! as int;
-    final priorRefundCount = refundPriorRows.single['count']! as int;
-    final refundRateBps = metrics.salesMinor <= 0
-        ? 0
-        : refundAmount * 10000 ~/ metrics.salesMinor;
-    final unusualCount = refundCount >= 3 &&
-        (priorRefundCount == 0 || refundCount * 7 >= priorRefundCount * 2);
-    final unusualAmount = refundAmount >= 50000 && refundRateBps >= 1000;
-    if (unusualCount || unusualAmount) {
-      insights.add(
-        LocalBusinessInsight(
-          id: 'refund-anomaly-${generatedAt.toIso8601String()}',
-          type: 'refund_anomaly',
-          classification: InsightClassification.calculation,
-          title: 'Refund activity needs attention',
-          message:
-              '$refundCount refund${refundCount == 1 ? '' : 's'} totaling '
-              '${formatInr(refundAmount)} were recorded today.',
-          evidence: [
-            InsightEvidence(
-              sourceType: 'sale_return',
-              metric: 'today_refund_count',
-              value: refundCount,
-              window: 'today',
-            ),
-            InsightEvidence(
-              sourceType: 'sale_return',
-              metric: 'today_refund_minor',
-              value: refundAmount,
-              window: 'today',
-            ),
-            InsightEvidence(
-              sourceType: 'sale_return',
-              metric: 'prior_7_day_refund_count',
-              value: priorRefundCount,
-              window: 'prior_7_days',
-            ),
-          ],
-          generatedAt: generatedAt,
-        ),
-      );
-    }
-
     final variance = metrics.latestCashVarianceMinor;
       return AssistantAnswer(
         question: question,
@@ -3046,6 +2974,78 @@ class LocalPosDatabase {
           generatedAt: generatedAt,
         ),
       );
+    }
+
+    final localGeneratedAt = generatedAt.toLocal();
+    final todayStart = DateTime(
+    localGeneratedAt.year,
+    localGeneratedAt.month,
+    localGeneratedAt.day,
+    ).toUtc();
+    final tomorrow = todayStart.add(const Duration(days: 1));
+    final priorStart = todayStart.subtract(const Duration(days: 7));
+    final refundTodayRows = await _database.rawQuery(
+    '''
+    SELECT COUNT(*) AS count, COALESCE(SUM(total_refund_minor), 0) AS amount
+    FROM sale_return
+    WHERE status = 'finalized'
+      AND returned_at >= ?
+      AND returned_at < ?
+    ''',
+    [todayStart.toIso8601String(), tomorrow.toIso8601String()],
+    );
+    final refundPriorRows = await _database.rawQuery(
+    '''
+    SELECT COUNT(*) AS count
+    FROM sale_return
+    WHERE status = 'finalized'
+      AND returned_at >= ?
+      AND returned_at < ?
+    ''',
+    [priorStart.toIso8601String(), todayStart.toIso8601String()],
+    );
+    final refundCount = refundTodayRows.single['count']! as int;
+    final refundAmount = refundTodayRows.single['amount']! as int;
+    final priorRefundCount = refundPriorRows.single['count']! as int;
+    final refundRateBps = metrics.salesMinor <= 0
+      ? 0
+      : refundAmount * 10000 ~/ metrics.salesMinor;
+    final unusualCount = refundCount >= 3 &&
+      (priorRefundCount == 0 || refundCount * 7 >= priorRefundCount * 2);
+    final unusualAmount = refundAmount >= 50000 && refundRateBps >= 1000;
+    if (unusualCount || unusualAmount) {
+    insights.add(
+      LocalBusinessInsight(
+        id: 'refund-anomaly-${generatedAt.toIso8601String()}',
+        type: 'refund_anomaly',
+        classification: InsightClassification.calculation,
+        title: 'Refund activity needs attention',
+        message:
+            '$refundCount refund${refundCount == 1 ? '' : 's'} totaling '
+            '${formatInr(refundAmount)} were recorded today.',
+        evidence: [
+          InsightEvidence(
+            sourceType: 'sale_return',
+            metric: 'today_refund_count',
+            value: refundCount,
+            window: 'today',
+          ),
+          InsightEvidence(
+            sourceType: 'sale_return',
+            metric: 'today_refund_minor',
+            value: refundAmount,
+            window: 'today',
+          ),
+          InsightEvidence(
+            sourceType: 'sale_return',
+            metric: 'prior_7_day_refund_count',
+            value: priorRefundCount,
+            window: 'prior_7_days',
+          ),
+        ],
+        generatedAt: generatedAt,
+      ),
+    );
     }
 
     final variance = metrics.latestCashVarianceMinor;
