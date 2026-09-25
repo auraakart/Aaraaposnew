@@ -217,31 +217,3 @@ class _MainShellState extends State<MainShell> {
     );
   }
 }
-
-class _PlaceholderPanel extends StatelessWidget {
-  const _PlaceholderPanel({required this.title});
-
-  final String title;
-
-  @override
-  Widget build(BuildContext context) {
-    return Center(
-      child: ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: 520),
-        child: Semantics(
-          container: true,
-          label: '$title screen',
-          child: Card(
-            child: Padding(
-              padding: const EdgeInsets.all(24),
-              child: Text(
-                '$title is planned for its roadmap milestone.',
-                textAlign: TextAlign.center,
-              ),
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-}
