@@ -19,7 +19,8 @@ const sale: AccountingExportRow = {
     taxableMinor: 10000,
     cgstMinor: 900,
     sgstMinor: 900,
-    igstMinor: 0
+    igstMinor: 0,
+    unclassifiedTaxMinor: 0
   },
   totalMinor: 11800,
   paymentMethod: "cash",
@@ -38,7 +39,8 @@ test("accounting manifest preserves register and GST totals", () => {
     taxableMinor: 10000,
     cgstMinor: 900,
     sgstMinor: 900,
-    igstMinor: 0
+    igstMinor: 0,
+    unclassifiedTaxMinor: 0
   });
 });
 
