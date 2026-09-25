@@ -5,6 +5,7 @@ import {
   assertSameBusinessStores,
   assertTransferAuthorized,
   nextTransferStatus,
+  transferStockEvents,
   type StoreTransfer
 } from "../src/multistore.js";
 import { AuthorizationError, type AuthenticatedPrincipal } from "../src/security.js";
@@ -108,5 +109,44 @@ test("store metrics aggregate without losing store detail", () => {
         }
       ]
     }
+  );
+});
+
+
+test("dispatch and receive emit balanced stock events", () => {
+  assert.deepEqual(
+    transferStockEvents({ ...transfer, status: "dispatched" }),
+    [
+      {
+        storeId: "store-a",
+        productId: "milk",
+        movementType: "transfer_out",
+        quantityDeltaMilli: -5000,
+        sourceEntityType: "store_transfer",
+        sourceEntityId: "transfer-1"
+      }
+    ]
+  );
+
+  assert.deepEqual(
+    transferStockEvents({ ...transfer, status: "received" }),
+    [
+      {
+        storeId: "store-a",
+        productId: "milk",
+        movementType: "transfer_out",
+        quantityDeltaMilli: -5000,
+        sourceEntityType: "store_transfer",
+        sourceEntityId: "transfer-1"
+      },
+      {
+        storeId: "store-b",
+        productId: "milk",
+        movementType: "transfer_in",
+        quantityDeltaMilli: 5000,
+        sourceEntityType: "store_transfer",
+        sourceEntityId: "transfer-1"
+      }
+    ]
   );
 });
