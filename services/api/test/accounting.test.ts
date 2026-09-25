@@ -13,6 +13,7 @@ const sale: AccountingExportRow = {
   occurredAt: "2026-09-25T10:00:00Z",
   partyName: "Ramesh",
   description: "Retail sale",
+  balanceEffect: "increase",
   grossMinor: 11800,
   discountMinor: 0,
   tax: {
