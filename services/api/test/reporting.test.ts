@@ -20,6 +20,7 @@ test("profit is shown only with complete cost coverage", () => {
       moneyReceivedMinor: 90000,
       moneyDueMinor: 10000,
       expensesMinor: 10000,
+      refundsMinor: 0,
       estimatedProfitMinor: 30000,
       costCoverageBps: 10000
     }
