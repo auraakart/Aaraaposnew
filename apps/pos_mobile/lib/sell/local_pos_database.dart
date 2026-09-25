@@ -1055,9 +1055,8 @@ class LocalPosDatabase {
         throw StateError('Purchase order has no lines');
       }
 
+      final prepared = <Map<String, Object?>>[];
       var totalMinor = 0;
-      final receivedLines = <Map<String, Object?>>[];
-
       for (final line in lineRows) {
         final orderedMilli = line['quantity_ordered_milli']! as int;
         final alreadyReceived = line['quantity_received_milli']! as int;
@@ -1066,31 +1065,61 @@ class LocalPosDatabase {
 
         final unitCostMinor = line['unit_cost_minor']! as int;
         final taxMinor = line['tax_minor']! as int;
-        final productId = line['product_id']! as String;
         final lineTotalMinor = purchaseLineTotalMinor(
           quantityMilli: remainingMilli,
           unitCostMinor: unitCostMinor,
           taxMinor: taxMinor,
         );
         totalMinor += lineTotalMinor;
-
-        final receiptLineId = _uuid.v4();
-        await txn.insert('purchase_receipt_line', {
-          'id': receiptLineId,
-          'purchase_receipt_id': receiptId,
+        prepared.add({
           'purchase_order_line_id': line['id'],
-          'product_id': productId,
+          'product_id': line['product_id'],
           'quantity_received_milli': remainingMilli,
+          'quantity_ordered_milli': orderedMilli,
           'unit_cost_minor': unitCostMinor,
           'tax_minor': taxMinor,
           'line_total_minor': lineTotalMinor,
+        });
+      }
+
+      if (prepared.isEmpty || totalMinor <= 0) {
+        throw StateError('Nothing remains to receive');
+      }
+
+      await txn.insert('purchase_receipt', {
+        'id': receiptId,
+        'supplier_id': supplierId,
+        'purchase_order_id': purchaseOrderId,
+        'supplier_invoice_number': supplierInvoiceNumber?.trim().isEmpty ?? true
+            ? null
+            : supplierInvoiceNumber!.trim(),
+        'received_at': now.toIso8601String(),
+        'total_minor': totalMinor,
+        'idempotency_key': idempotencyKey,
+      });
+
+      final receivedLines = <Map<String, Object?>>[];
+      for (final line in prepared) {
+        final productId = line['product_id']! as String;
+        final remainingMilli = line['quantity_received_milli']! as int;
+        final orderedMilli = line['quantity_ordered_milli']! as int;
+
+        await txn.insert('purchase_receipt_line', {
+          'id': _uuid.v4(),
+          'purchase_receipt_id': receiptId,
+          'purchase_order_line_id': line['purchase_order_line_id'],
+          'product_id': productId,
+          'quantity_received_milli': remainingMilli,
+          'unit_cost_minor': line['unit_cost_minor'],
+          'tax_minor': line['tax_minor'],
+          'line_total_minor': line['line_total_minor'],
         });
 
         await txn.update(
           'purchase_order_line',
           {'quantity_received_milli': orderedMilli},
           where: 'id = ?',
-          whereArgs: [line['id']],
+          whereArgs: [line['purchase_order_line_id']],
         );
 
         await txn.insert('stock_movement', {
@@ -1107,27 +1136,11 @@ class LocalPosDatabase {
         receivedLines.add({
           'productId': productId,
           'quantityReceivedMilli': remainingMilli,
-          'unitCostMinor': unitCostMinor,
-          'taxMinor': taxMinor,
-          'lineTotalMinor': lineTotalMinor,
+          'unitCostMinor': line['unit_cost_minor'],
+          'taxMinor': line['tax_minor'],
+          'lineTotalMinor': line['line_total_minor'],
         });
       }
-
-      if (receivedLines.isEmpty || totalMinor <= 0) {
-        throw StateError('Nothing remains to receive');
-      }
-
-      await txn.insert('purchase_receipt', {
-        'id': receiptId,
-        'supplier_id': supplierId,
-        'purchase_order_id': purchaseOrderId,
-        'supplier_invoice_number': supplierInvoiceNumber?.trim().isEmpty ?? true
-            ? null
-            : supplierInvoiceNumber!.trim(),
-        'received_at': now.toIso8601String(),
-        'total_minor': totalMinor,
-        'idempotency_key': idempotencyKey,
-      });
 
       await txn.insert('supplier_ledger_entry', {
         'id': _uuid.v4(),
