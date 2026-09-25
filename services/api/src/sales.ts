@@ -7,6 +7,8 @@ export interface SaleLineInput {
   unitPriceMinor: number;
   quantityMilli: number;
   discountMinor: number;
+  discountSource?: "manual" | "promotion" | "loyalty";
+  discountReferenceId?: string;
   taxRateBps: number;
   taxPriceMode: TaxPriceMode;
 }
@@ -23,6 +25,8 @@ export interface PricedSaleLine {
   igstMinor: number;
   taxMinor: number;
   totalMinor: number;
+  discountSource?: "manual" | "promotion" | "loyalty";
+  discountReferenceId?: string;
 }
 
 export interface SaleTotals {
@@ -112,7 +116,13 @@ export function priceSaleLine(line: SaleLineInput, taxMode: TaxMode): PricedSale
     taxableMinor,
     ...splitTax(taxMinor, taxMode),
     taxMinor,
-    totalMinor
+    totalMinor,
+    ...(line.discountSource === undefined
+      ? {}
+      : { discountSource: line.discountSource }),
+    ...(line.discountReferenceId === undefined
+      ? {}
+      : { discountReferenceId: line.discountReferenceId })
   };
 }
 
