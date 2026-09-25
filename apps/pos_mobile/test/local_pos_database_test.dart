@@ -35,6 +35,7 @@ void main() {
     expect(first.changeMinor, 7300);
     expect(first.receiptText, contains('Milk'));
     expect(await database.pendingOutboxCount(), 1);
+    expect(await database.paymentEventCountForSale(first.saleId), 1);
 
     final second = await database.finalizeCashSale(
       context: context,
