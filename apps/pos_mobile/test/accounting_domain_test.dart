@@ -12,7 +12,7 @@ void main() {
     balanceEffect: 'increase',
     grossMinor: 11800,
     discountMinor: 0,
-    tax: AccountingTaxBreakdown(
+    tax: const AccountingTaxBreakdown(
       taxableMinor: 10000,
       cgstMinor: 900,
       sgstMinor: 900,
@@ -35,7 +35,7 @@ void main() {
         balanceEffect: 'decrease',
         grossMinor: 11800,
         discountMinor: 0,
-        tax: AccountingTaxBreakdown(
+        tax: const AccountingTaxBreakdown(
           taxableMinor: 10000,
           cgstMinor: 900,
           sgstMinor: 900,
@@ -52,7 +52,7 @@ void main() {
         balanceEffect: 'increase',
         grossMinor: 7080,
         discountMinor: 0,
-        tax: AccountingTaxBreakdown(
+        tax: const AccountingTaxBreakdown(
           taxableMinor: 6000,
           cgstMinor: 0,
           sgstMinor: 0,
