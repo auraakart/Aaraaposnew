@@ -3778,6 +3778,8 @@ class LocalPosDatabase {
     late int refundMinor;
     var cashRefundMinor = 0;
     var creditReversalMinor = 0;
+    var loyaltyEarnedPointsReversed = 0;
+    var loyaltyRedeemedPointsRestored = 0;
 
     await _database.transaction((txn) async {
       final sales = await txn.rawQuery(
@@ -4018,6 +4020,7 @@ class LocalPosDatabase {
           final alreadyReversed = reversedRows.single['points']! as int;
           final pointsToReverse = targetReversal - alreadyReversed;
           if (pointsToReverse > 0) {
+            loyaltyEarnedPointsReversed = pointsToReverse;
             await txn.insert('customer_loyalty_entry', {
               'id': _uuid.v4(),
               'customer_id': customerId,
@@ -4048,6 +4051,7 @@ class LocalPosDatabase {
           final alreadyRestored = restoredRows.single['points']! as int;
           final pointsToRestore = targetRestore - alreadyRestored;
           if (pointsToRestore > 0) {
+            loyaltyRedeemedPointsRestored = pointsToRestore;
             await txn.insert('customer_loyalty_entry', {
               'id': _uuid.v4(),
               'customer_id': customerId,
@@ -4080,6 +4084,8 @@ class LocalPosDatabase {
           'refundMinor': total,
           'cashRefundMinor': cashRefundMinor,
           'creditReversalMinor': creditReversalMinor,
+          'loyaltyEarnedPointsReversed': loyaltyEarnedPointsReversed,
+          'loyaltyRedeemedPointsRestored': loyaltyRedeemedPointsRestored,
           'lines': prepared,
         }),
         'state': 'pending',
