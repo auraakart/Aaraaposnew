@@ -79,3 +79,71 @@ test("discount cannot exceed line gross", () => {
     taxPriceMode: "exclusive"
   }, "intra_state"));
 });
+
+
+test("partial return prorates tax and total from the original sale line", () => {
+  assert.deepEqual(
+    priceReturnLine({
+      saleLineId: "line-1",
+      productId: "p1",
+      soldQuantityMilli: 2000,
+      alreadyReturnedQuantityMilli: 0,
+      requestedReturnQuantityMilli: 1000,
+      taxableMinor: 20000,
+      cgstMinor: 500,
+      sgstMinor: 500,
+      igstMinor: 0,
+      taxMinor: 1000,
+      totalMinor: 21000
+    }),
+    {
+      saleLineId: "line-1",
+      productId: "p1",
+      quantityMilli: 1000,
+      taxableMinor: 10000,
+      cgstMinor: 250,
+      sgstMinor: 250,
+      igstMinor: 0,
+      taxMinor: 500,
+      totalMinor: 10500
+    }
+  );
+});
+
+test("return cannot exceed remaining refundable quantity", () => {
+  assert.throws(() =>
+    priceReturnLine({
+      saleLineId: "line-1",
+      productId: "p1",
+      soldQuantityMilli: 2000,
+      alreadyReturnedQuantityMilli: 1500,
+      requestedReturnQuantityMilli: 1000,
+      taxableMinor: 20000,
+      cgstMinor: 500,
+      sgstMinor: 500,
+      igstMinor: 0,
+      taxMinor: 1000,
+      totalMinor: 21000
+    })
+  );
+});
+
+test("cashier discount above self-approval threshold requires approval", () => {
+  assert.equal(
+    requiresDiscountApproval({
+      lineGrossMinor: 10000,
+      discountMinor: 600,
+      actorRole: "cashier",
+      cashierSelfApprovalLimitBps: 500
+    }),
+    true
+  );
+  assert.equal(
+    requiresDiscountApproval({
+      lineGrossMinor: 10000,
+      discountMinor: 600,
+      actorRole: "manager"
+    }),
+    false
+  );
+});
