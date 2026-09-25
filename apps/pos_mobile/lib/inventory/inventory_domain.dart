@@ -8,6 +8,7 @@ enum StockMovementType {
   loss,
   transferIn,
   transferOut,
+  purchaseReturn,
 }
 
 enum StockHealth { healthy, low, outOfStock, negative }
@@ -22,6 +23,7 @@ String stockMovementTypeValue(StockMovementType type) => switch (type) {
       StockMovementType.loss => 'loss',
       StockMovementType.transferIn => 'transfer_in',
       StockMovementType.transferOut => 'transfer_out',
+      StockMovementType.purchaseReturn => 'purchase_return',
     };
 
 void validateStockMovement({
@@ -44,6 +46,7 @@ void validateStockMovement({
     StockMovementType.damage,
     StockMovementType.loss,
     StockMovementType.transferOut,
+    StockMovementType.purchaseReturn,
   };
 
   if (increaseTypes.contains(type) && quantityDeltaMilli <= 0) {
