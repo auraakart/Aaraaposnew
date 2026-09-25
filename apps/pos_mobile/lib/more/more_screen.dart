@@ -6,6 +6,7 @@ import '../operations/operations_screen.dart';
 import '../purchases/purchases_screen.dart';
 import '../returns/returns_screen.dart';
 import '../sell/local_pos_database.dart';
+import '../sync/integration_status_screen.dart';
 
 class MoreScreen extends StatelessWidget {
   const MoreScreen({
@@ -22,6 +23,26 @@ class MoreScreen extends StatelessWidget {
     return ListView(
       padding: const EdgeInsets.all(16),
       children: [
+        Card(
+          child: ListTile(
+            leading: const Icon(Icons.hub_outlined),
+            title: const Text('Integrations & Sync'),
+            subtitle: const Text(
+              'Sync queue, provider capabilities and integration boundaries',
+            ),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () {
+              Navigator.of(context).push(
+                MaterialPageRoute<void>(
+                  builder: (_) => Scaffold(
+                    appBar: AppBar(title: const Text('Integrations & Sync')),
+                    body: IntegrationStatusScreen(database: database),
+                  ),
+                ),
+              );
+            },
+          ),
+        ),
         Card(
           child: ListTile(
             leading: const Icon(Icons.stars_outlined),
