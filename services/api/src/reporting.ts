@@ -4,6 +4,7 @@ export interface PeriodMetricsInput {
   moneyReceivedMinor: number;
   moneyDueMinor: number;
   expensesMinor: number;
+  refundsMinor: number;
   estimatedCostMinor?: number;
   costCoveredSalesMinor?: number;
 }
@@ -14,6 +15,7 @@ export interface PeriodMetrics {
   moneyReceivedMinor: number;
   moneyDueMinor: number;
   expensesMinor: number;
+  refundsMinor: number;
   estimatedProfitMinor?: number;
   costCoverageBps: number;
 }
@@ -32,6 +34,7 @@ export function buildPeriodMetrics(
   assertNonNegativeInteger(input.moneyReceivedMinor, "moneyReceivedMinor");
   assertNonNegativeInteger(input.moneyDueMinor, "moneyDueMinor");
   assertNonNegativeInteger(input.expensesMinor, "expensesMinor");
+  assertNonNegativeInteger(input.refundsMinor, "refundsMinor");
 
   const covered = input.costCoveredSalesMinor ?? 0;
   assertNonNegativeInteger(covered, "costCoveredSalesMinor");
@@ -50,12 +53,14 @@ export function buildPeriodMetrics(
     moneyReceivedMinor: input.moneyReceivedMinor,
     moneyDueMinor: input.moneyDueMinor,
     expensesMinor: input.expensesMinor,
+    refundsMinor: input.refundsMinor,
     costCoverageBps
   };
 
   if (
     input.estimatedCostMinor !== undefined &&
-    covered === input.salesMinor
+    covered === input.salesMinor &&
+    input.refundsMinor === 0
   ) {
     assertNonNegativeInteger(input.estimatedCostMinor, "estimatedCostMinor");
     return {

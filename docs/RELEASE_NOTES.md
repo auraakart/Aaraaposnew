@@ -1,5 +1,13 @@
 # Release Notes
 
+## V2.1 Core Transaction Closure — validation
+
+Added partial returns/refunds with immutable original-sale linkage, Pay Later credit/cash split refunds, stock restoration, shift-aware cash refunds, hold/resume, line discounts with authorization rules, camera barcode scan UI, receipt copy/share adapters, refund reporting and refund anomaly intelligence.
+
+Original finalized sales are preserved; returns are separate correction records.
+
+Physical printer/camera certification, external provider refunds and production approval execution remain external boundaries.
+
 ## V2 AI Assistance — validation
 
 Added an offline evidence-backed Business Assistant, daily summary, sales comparison, purchase suggestions, customer win-back candidates and cash anomaly insights. Every important insight is labelled as fact/calculation/prediction/recommendation and exposes supporting evidence.
@@ -68,6 +76,7 @@ Not claimed:
 - tax filing gateways or regulatory certification
 - physical hardware certification
 - production credentials, hosting or deployment
+
 
 
 

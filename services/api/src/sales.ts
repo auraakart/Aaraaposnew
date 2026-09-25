@@ -139,3 +139,122 @@ export function cashChangeDue(totalMinor: number, tenderedMinor: number): number
   }
   return tenderedMinor - totalMinor;
 }
+
+
+export type ReturnRefundMethod = "cash" | "customer_credit" | "upi" | "card";
+
+export interface ReturnLineSource {
+  saleLineId: string;
+  productId: string;
+  soldQuantityMilli: number;
+  alreadyReturnedQuantityMilli: number;
+  requestedReturnQuantityMilli: number;
+  taxableMinor: number;
+  cgstMinor: number;
+  sgstMinor: number;
+  igstMinor: number;
+  taxMinor: number;
+  totalMinor: number;
+}
+
+export interface PricedReturnLine {
+  saleLineId: string;
+  productId: string;
+  quantityMilli: number;
+  taxableMinor: number;
+  cgstMinor: number;
+  sgstMinor: number;
+  igstMinor: number;
+  taxMinor: number;
+  totalMinor: number;
+}
+
+function prorateMinor(
+  originalMinor: number,
+  partQuantityMilli: number,
+  originalQuantityMilli: number
+): number {
+  assertInteger("originalMinor", originalMinor);
+  assertInteger("partQuantityMilli", partQuantityMilli);
+  assertInteger("originalQuantityMilli", originalQuantityMilli);
+  if (originalMinor < 0 || partQuantityMilli < 0 || originalQuantityMilli <= 0) {
+    throw new Error("invalid return proration inputs");
+  }
+  return roundDiv(originalMinor * partQuantityMilli, originalQuantityMilli);
+}
+
+export function priceReturnLine(source: ReturnLineSource): PricedReturnLine {
+  const remainingMilli =
+    source.soldQuantityMilli - source.alreadyReturnedQuantityMilli;
+  if (
+    source.soldQuantityMilli <= 0 ||
+    source.alreadyReturnedQuantityMilli < 0 ||
+    source.requestedReturnQuantityMilli <= 0 ||
+    remainingMilli < source.requestedReturnQuantityMilli
+  ) {
+    throw new Error("return quantity exceeds refundable quantity");
+  }
+
+  const quantityMilli = source.requestedReturnQuantityMilli;
+  return {
+    saleLineId: source.saleLineId,
+    productId: source.productId,
+    quantityMilli,
+    taxableMinor: prorateMinor(
+      source.taxableMinor,
+      quantityMilli,
+      source.soldQuantityMilli
+    ),
+    cgstMinor: prorateMinor(
+      source.cgstMinor,
+      quantityMilli,
+      source.soldQuantityMilli
+    ),
+    sgstMinor: prorateMinor(
+      source.sgstMinor,
+      quantityMilli,
+      source.soldQuantityMilli
+    ),
+    igstMinor: prorateMinor(
+      source.igstMinor,
+      quantityMilli,
+      source.soldQuantityMilli
+    ),
+    taxMinor: prorateMinor(
+      source.taxMinor,
+      quantityMilli,
+      source.soldQuantityMilli
+    ),
+    totalMinor: prorateMinor(
+      source.totalMinor,
+      quantityMilli,
+      source.soldQuantityMilli
+    )
+  };
+}
+
+export function requiresDiscountApproval(input: {
+  lineGrossMinor: number;
+  discountMinor: number;
+  actorRole: "owner" | "manager" | "cashier" | "stock_worker";
+  cashierSelfApprovalLimitBps?: number;
+}): boolean {
+  assertInteger("lineGrossMinor", input.lineGrossMinor);
+  assertInteger("discountMinor", input.discountMinor);
+  if (input.lineGrossMinor <= 0 || input.discountMinor < 0) {
+    throw new Error("invalid discount approval inputs");
+  }
+  if (input.discountMinor > input.lineGrossMinor) {
+    throw new Error("discount cannot exceed line gross");
+  }
+  if (input.discountMinor === 0) return false;
+  if (input.actorRole === "owner" || input.actorRole === "manager") return false;
+  if (input.actorRole === "stock_worker") return true;
+
+  const limitBps = input.cashierSelfApprovalLimitBps ?? 500;
+  assertInteger("cashierSelfApprovalLimitBps", limitBps);
+  const discountBps = Math.floor(
+    (input.discountMinor * 10000) / input.lineGrossMinor
+  );
+  return discountBps > limitBps;
+}

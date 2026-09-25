@@ -223,6 +223,10 @@ class _MetricGrid extends StatelessWidget {
         value: formatInr(metrics.expensesMinor),
       ),
       _MetricCard(
+        label: 'Refunds',
+        value: formatInr(metrics.refundsMinor),
+      ),
+      _MetricCard(
         label: 'Estimated Profit',
         value: metrics.estimatedProfitMinor == null
             ? 'Need cost data'
@@ -324,6 +328,7 @@ IconData _timelineIcon(String type) => switch (type) {
       'expense' => Icons.payments_outlined,
       'purchase_receipt' => Icons.inventory_2_outlined,
       'customer_credit' => Icons.schedule_send_outlined,
+      'sale_return' => Icons.assignment_return_outlined,
       'shift_open' => Icons.login,
       'shift_close' => Icons.logout,
       _ => Icons.circle_outlined,

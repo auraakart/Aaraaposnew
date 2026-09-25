@@ -49,10 +49,10 @@ The selling flow prioritizes:
 
 ## Risks and limitations
 
-- Camera barcode scanning is not yet integrated; keyboard/wedge scanners can use barcode search.
-- Receipt printing/sharing adapters are not yet implemented.
+- Camera barcode scanning, hold/resume, line discounts, customer association and receipt copy/share were closed in V2.1.
+- A printer adapter contract now exists, but physical printer integration/certification remains external validation.
 - Local bootstrap creates provisional IDs; online account linking must authenticate ownership before server synchronization.
-- Product images, hold/resume, line discounts and customer association are deferred within the Sell roadmap.
+- Product images remain a later catalogue enhancement rather than a transaction-integrity requirement.
 - Tax rates are selectable data, but production GST behavior still requires current regulatory validation.
 - Physical printer/scanner certification is external validation.
 
@@ -64,4 +64,4 @@ Flutter tests cover first-run setup/navigation, matching money/tax cases, local 
 
 ## Definition-of-Done assessment
 
-The core offline cash sale is implemented and testable. V1 is integration-ready only when CI passes and the remaining explicitly scoped Sell gaps are either implemented or carried as named follow-up slices rather than silently treated as complete.
+The core offline cash sale is implemented and testable. The transaction-critical follow-up gaps were explicitly closed in V2.1; external provider, regulatory and physical-device validation remains outside repository-only completion.

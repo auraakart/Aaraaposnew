@@ -10,6 +10,7 @@ test("profit is shown only with complete cost coverage", () => {
       moneyReceivedMinor: 90000,
       moneyDueMinor: 10000,
       expensesMinor: 10000,
+      refundsMinor: 0,
       estimatedCostMinor: 60000,
       costCoveredSalesMinor: 100000
     }),
@@ -19,6 +20,7 @@ test("profit is shown only with complete cost coverage", () => {
       moneyReceivedMinor: 90000,
       moneyDueMinor: 10000,
       expensesMinor: 10000,
+      refundsMinor: 0,
       estimatedProfitMinor: 30000,
       costCoverageBps: 10000
     }
@@ -33,6 +35,7 @@ test("partial cost coverage does not fabricate profit", () => {
       moneyReceivedMinor: 90000,
       moneyDueMinor: 10000,
       expensesMinor: 10000,
+      refundsMinor: 0,
       estimatedCostMinor: 30000,
       costCoveredSalesMinor: 50000
     }),
@@ -42,6 +45,7 @@ test("partial cost coverage does not fabricate profit", () => {
       moneyReceivedMinor: 90000,
       moneyDueMinor: 10000,
       expensesMinor: 10000,
+      refundsMinor: 0,
       costCoverageBps: 5000
     }
   );
@@ -55,5 +59,30 @@ test("quality issue summary preserves severity", () => {
       { type: "duplicate_customer", message: "Duplicate customer", severity: "warning" }
     ]),
     { info: 0, warning: 2, critical: 1 }
+  );
+});
+
+
+test("refunds suppress estimated profit until return COGS is reconciled", () => {
+  assert.deepEqual(
+    buildPeriodMetrics({
+      salesMinor: 100000,
+      billCount: 10,
+      moneyReceivedMinor: 90000,
+      moneyDueMinor: 10000,
+      expensesMinor: 10000,
+      refundsMinor: 20000,
+      estimatedCostMinor: 60000,
+      costCoveredSalesMinor: 100000
+    }),
+    {
+      salesMinor: 100000,
+      billCount: 10,
+      moneyReceivedMinor: 90000,
+      moneyDueMinor: 10000,
+      expensesMinor: 10000,
+      refundsMinor: 20000,
+      costCoverageBps: 10000
+    }
   );
 });

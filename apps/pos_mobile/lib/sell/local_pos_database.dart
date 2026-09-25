@@ -10,6 +10,7 @@ import '../intelligence/owner_intelligence.dart';
 import '../inventory/inventory_domain.dart';
 import '../operations/operations_domain.dart';
 import '../purchases/purchase_domain.dart';
+import 'return_domain.dart';
 import 'sale_domain.dart';
 
 class LocalSaleContext {
@@ -86,7 +87,7 @@ class LocalPosDatabase {
     _db = await _factory.openDatabase(
       path,
       options: OpenDatabaseOptions(
-        version: 6,
+        version: 7,
         onConfigure: (db) async {
           await db.execute('PRAGMA foreign_keys = ON');
         },
@@ -359,6 +360,71 @@ class LocalPosDatabase {
             )
           ''');
           await db.execute('''
+            CREATE TABLE held_sale (
+              id TEXT PRIMARY KEY,
+              customer_id TEXT REFERENCES customer(id),
+              held_at TEXT NOT NULL
+            )
+          ''');
+          await db.execute('''
+            CREATE TABLE held_sale_line (
+              id TEXT PRIMARY KEY,
+              held_sale_id TEXT NOT NULL REFERENCES held_sale(id) ON DELETE CASCADE,
+              product_id TEXT NOT NULL REFERENCES product(id),
+              product_name_snapshot TEXT NOT NULL,
+              quantity_milli INTEGER NOT NULL,
+              unit_price_minor INTEGER NOT NULL,
+              discount_minor INTEGER NOT NULL DEFAULT 0,
+              tax_rate_bps INTEGER NOT NULL,
+              tax_price_mode TEXT NOT NULL
+            )
+          ''');
+          await db.execute('''
+            CREATE TABLE return_sequence (
+              terminal_code TEXT PRIMARY KEY,
+              next_return INTEGER NOT NULL
+            )
+          ''');
+          await db.execute('''
+            CREATE TABLE sale_return (
+              id TEXT PRIMARY KEY,
+              sale_id TEXT NOT NULL REFERENCES sale(id),
+              return_number TEXT NOT NULL UNIQUE,
+              reason TEXT NOT NULL,
+              total_refund_minor INTEGER NOT NULL,
+              status TEXT NOT NULL,
+              returned_at TEXT NOT NULL,
+              idempotency_key TEXT NOT NULL UNIQUE
+            )
+          ''');
+          await db.execute('''
+            CREATE TABLE sale_return_line (
+              id TEXT PRIMARY KEY,
+              sale_return_id TEXT NOT NULL REFERENCES sale_return(id),
+              sale_line_id TEXT NOT NULL REFERENCES sale_line(id),
+              product_id TEXT NOT NULL REFERENCES product(id),
+              quantity_milli INTEGER NOT NULL,
+              taxable_minor INTEGER NOT NULL,
+              cgst_minor INTEGER NOT NULL,
+              sgst_minor INTEGER NOT NULL,
+              igst_minor INTEGER NOT NULL,
+              tax_minor INTEGER NOT NULL,
+              total_minor INTEGER NOT NULL
+            )
+          ''');
+          await db.execute('''
+            CREATE TABLE refund (
+              id TEXT PRIMARY KEY,
+              sale_return_id TEXT NOT NULL REFERENCES sale_return(id),
+              shift_id TEXT REFERENCES shift(id),
+              method TEXT NOT NULL,
+              amount_minor INTEGER NOT NULL,
+              status TEXT NOT NULL,
+              created_at TEXT NOT NULL,
+              idempotency_key TEXT NOT NULL UNIQUE
+            )
+          ''');
+          await db.execute('''
             CREATE TABLE stock_movement (
               id TEXT PRIMARY KEY,
               product_id TEXT NOT NULL REFERENCES product(id),
@@ -625,6 +691,77 @@ class LocalPosDatabase {
               WHERE singleton_id = 1
             ''');
           }
+          if (oldVersion < 7) {
+            await db.execute('''
+              CREATE TABLE held_sale (
+                id TEXT PRIMARY KEY,
+                customer_id TEXT REFERENCES customer(id),
+                held_at TEXT NOT NULL
+              )
+            ''');
+            await db.execute('''
+              CREATE TABLE held_sale_line (
+                id TEXT PRIMARY KEY,
+                held_sale_id TEXT NOT NULL REFERENCES held_sale(id) ON DELETE CASCADE,
+                product_id TEXT NOT NULL REFERENCES product(id),
+                product_name_snapshot TEXT NOT NULL,
+                quantity_milli INTEGER NOT NULL,
+                unit_price_minor INTEGER NOT NULL,
+                discount_minor INTEGER NOT NULL DEFAULT 0,
+                tax_rate_bps INTEGER NOT NULL,
+                tax_price_mode TEXT NOT NULL
+              )
+            ''');
+            await db.execute('''
+              CREATE TABLE return_sequence (
+                terminal_code TEXT PRIMARY KEY,
+                next_return INTEGER NOT NULL
+              )
+            ''');
+            await db.execute('''
+              INSERT OR IGNORE INTO return_sequence (terminal_code, next_return)
+              SELECT terminal_code, 1 FROM local_context WHERE singleton_id = 1
+            ''');
+            await db.execute('''
+              CREATE TABLE sale_return (
+                id TEXT PRIMARY KEY,
+                sale_id TEXT NOT NULL REFERENCES sale(id),
+                return_number TEXT NOT NULL UNIQUE,
+                reason TEXT NOT NULL,
+                total_refund_minor INTEGER NOT NULL,
+                status TEXT NOT NULL,
+                returned_at TEXT NOT NULL,
+                idempotency_key TEXT NOT NULL UNIQUE
+              )
+            ''');
+            await db.execute('''
+              CREATE TABLE sale_return_line (
+                id TEXT PRIMARY KEY,
+                sale_return_id TEXT NOT NULL REFERENCES sale_return(id),
+                sale_line_id TEXT NOT NULL REFERENCES sale_line(id),
+                product_id TEXT NOT NULL REFERENCES product(id),
+                quantity_milli INTEGER NOT NULL,
+                taxable_minor INTEGER NOT NULL,
+                cgst_minor INTEGER NOT NULL,
+                sgst_minor INTEGER NOT NULL,
+                igst_minor INTEGER NOT NULL,
+                tax_minor INTEGER NOT NULL,
+                total_minor INTEGER NOT NULL
+              )
+            ''');
+            await db.execute('''
+              CREATE TABLE refund (
+                id TEXT PRIMARY KEY,
+                sale_return_id TEXT NOT NULL REFERENCES sale_return(id),
+                shift_id TEXT REFERENCES shift(id),
+                method TEXT NOT NULL,
+                amount_minor INTEGER NOT NULL,
+                status TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                idempotency_key TEXT NOT NULL UNIQUE
+              )
+            ''');
+          }
         },
       ),
     );
@@ -698,6 +835,10 @@ class LocalPosDatabase {
       await txn.insert('terminal_sequence', {
         'terminal_code': context.terminalCode,
         'next_invoice': 1,
+      });
+      await txn.insert('return_sequence', {
+        'terminal_code': context.terminalCode,
+        'next_return': 1,
       });
       await txn.insert('employee', {
         'id': context.userId,
@@ -1904,13 +2045,23 @@ class LocalPosDatabase {
         ''',
         [shiftId],
       );
+      final refundRows = await txn.rawQuery(
+        '''
+        SELECT COALESCE(SUM(amount_minor), 0) AS total
+        FROM refund
+        WHERE shift_id = ? AND method = 'cash' AND status = 'captured'
+        ''',
+        [shiftId],
+      );
 
       final expected = expectedClosingCashMinor(
         openingCashMinor: row['opening_cash_minor']! as int,
         cashSalesMinor: cashSalesRows.single['total']! as int,
         cashCreditCollectionsMinor: creditRows.single['total']! as int,
         cashDepositsMinor: movementRows.single['deposits']! as int,
-        cashWithdrawalsMinor: movementRows.single['withdrawals']! as int,
+        cashWithdrawalsMinor:
+            (movementRows.single['withdrawals']! as int) +
+            (refundRows.single['total']! as int),
         cashExpensesMinor: expenseRows.single['total']! as int,
       );
       final variance = actualClosingCashMinor - expected;
@@ -2066,6 +2217,17 @@ class LocalPosDatabase {
       [start, end],
     );
     final expensesMinor = expenseRows.single['expense_minor']! as int;
+    final refundRows = await _database.rawQuery(
+      '''
+      SELECT COALESCE(SUM(total_refund_minor), 0) AS refund_minor
+      FROM sale_return
+      WHERE status = 'finalized'
+        AND returned_at >= ?
+        AND returned_at < ?
+      ''',
+      [start, end],
+    );
+    final refundsMinor = refundRows.single['refund_minor']! as int;
 
     final costRows = await _database.rawQuery(
       '''
@@ -2109,7 +2271,7 @@ class LocalPosDatabase {
         ? 10000
         : (coveredTaxableMinor * 10000) ~/ taxableSalesMinor;
     final estimatedProfitMinor =
-        coveredTaxableMinor == taxableSalesMinor
+        coveredTaxableMinor == taxableSalesMinor && refundsMinor == 0
             ? taxableSalesMinor - estimatedCostMinor - expensesMinor
             : null;
 
@@ -2146,6 +2308,7 @@ class LocalPosDatabase {
       moneyReceivedMinor: moneyReceivedMinor,
       moneyDueMinor: moneyDueMinor < 0 ? 0 : moneyDueMinor,
       expensesMinor: expensesMinor,
+      refundsMinor: refundsMinor,
       estimatedProfitMinor: estimatedProfitMinor,
       lowStockCount: lowStockCount,
       costCoverageBps: costCoverageBps,
@@ -2179,6 +2342,27 @@ class LocalPosDatabase {
           title: 'Sale ${row['invoice_number']}',
           type: 'sale',
           amountMinor: row['total_minor']! as int,
+        ),
+      );
+    }
+
+    final returns = await _database.rawQuery(
+      '''
+      SELECT return_number, total_refund_minor, returned_at
+      FROM sale_return
+      WHERE status = 'finalized'
+      ORDER BY returned_at DESC
+      LIMIT ?
+      ''',
+      [limit],
+    );
+    for (final row in returns) {
+      items.add(
+        BusinessTimelineItem(
+          occurredAt: DateTime.parse(row['returned_at']! as String),
+          title: 'Return ${row['return_number']}',
+          type: 'sale_return',
+          amountMinor: -(row['total_refund_minor']! as int),
         ),
       );
     }
@@ -2420,6 +2604,25 @@ class LocalPosDatabase {
       );
     }
 
+    if (normalized.contains('refund') || normalized.contains('return')) {
+      final metrics = await businessMetrics(ReportPeriod.today);
+      return AssistantAnswer(
+        question: question,
+        classification: InsightClassification.fact,
+        answer: metrics.refundsMinor == 0
+            ? 'No refunds have been recorded today.'
+            : 'Refunds recorded today total ${formatInr(metrics.refundsMinor)}.',
+        evidence: [
+          InsightEvidence(
+            sourceType: 'sale_return',
+            metric: 'refunds_minor',
+            value: metrics.refundsMinor,
+            window: 'today',
+          ),
+        ],
+      );
+    }
+
     if (normalized.contains('low stock') ||
         normalized.contains('running out') ||
         normalized.contains('stock')) {
@@ -2527,7 +2730,7 @@ class LocalPosDatabase {
         normalized.contains('difference') ||
         normalized.contains('variance')) {
       final metrics = await businessMetrics(ReportPeriod.today);
-      final variance = metrics.latestCashVarianceMinor;
+    final variance = metrics.latestCashVarianceMinor;
       return AssistantAnswer(
         question: question,
         classification: InsightClassification.fact,
@@ -2601,7 +2804,8 @@ class LocalPosDatabase {
         title: 'Business today',
         message:
             'Sales ${formatInr(metrics.salesMinor)} from ${metrics.billCount} bills; '
-            'expenses ${formatInr(metrics.expensesMinor)}.',
+            'expenses ${formatInr(metrics.expensesMinor)}; '
+            'refunds ${formatInr(metrics.refundsMinor)}.',
         evidence: [
           InsightEvidence(
             sourceType: 'sale',
@@ -2772,6 +2976,78 @@ class LocalPosDatabase {
       );
     }
 
+    final localGeneratedAt = generatedAt.toLocal();
+    final todayStart = DateTime(
+    localGeneratedAt.year,
+    localGeneratedAt.month,
+    localGeneratedAt.day,
+    ).toUtc();
+    final tomorrow = todayStart.add(const Duration(days: 1));
+    final priorStart = todayStart.subtract(const Duration(days: 7));
+    final refundTodayRows = await _database.rawQuery(
+    '''
+    SELECT COUNT(*) AS count, COALESCE(SUM(total_refund_minor), 0) AS amount
+    FROM sale_return
+    WHERE status = 'finalized'
+      AND returned_at >= ?
+      AND returned_at < ?
+    ''',
+    [todayStart.toIso8601String(), tomorrow.toIso8601String()],
+    );
+    final refundPriorRows = await _database.rawQuery(
+    '''
+    SELECT COUNT(*) AS count
+    FROM sale_return
+    WHERE status = 'finalized'
+      AND returned_at >= ?
+      AND returned_at < ?
+    ''',
+    [priorStart.toIso8601String(), todayStart.toIso8601String()],
+    );
+    final refundCount = refundTodayRows.single['count']! as int;
+    final refundAmount = refundTodayRows.single['amount']! as int;
+    final priorRefundCount = refundPriorRows.single['count']! as int;
+    final refundRateBps = metrics.salesMinor <= 0
+      ? 0
+      : refundAmount * 10000 ~/ metrics.salesMinor;
+    final unusualCount = refundCount >= 3 &&
+      (priorRefundCount == 0 || refundCount * 7 >= priorRefundCount * 2);
+    final unusualAmount = refundAmount >= 50000 && refundRateBps >= 1000;
+    if (unusualCount || unusualAmount) {
+    insights.add(
+      LocalBusinessInsight(
+        id: 'refund-anomaly-${generatedAt.toIso8601String()}',
+        type: 'refund_anomaly',
+        classification: InsightClassification.calculation,
+        title: 'Refund activity needs attention',
+        message:
+            '$refundCount refund${refundCount == 1 ? '' : 's'} totaling '
+            '${formatInr(refundAmount)} were recorded today.',
+        evidence: [
+          InsightEvidence(
+            sourceType: 'sale_return',
+            metric: 'today_refund_count',
+            value: refundCount,
+            window: 'today',
+          ),
+          InsightEvidence(
+            sourceType: 'sale_return',
+            metric: 'today_refund_minor',
+            value: refundAmount,
+            window: 'today',
+          ),
+          InsightEvidence(
+            sourceType: 'sale_return',
+            metric: 'prior_7_day_refund_count',
+            value: priorRefundCount,
+            window: 'prior_7_days',
+          ),
+        ],
+        generatedAt: generatedAt,
+      ),
+    );
+    }
+
     final variance = metrics.latestCashVarianceMinor;
     if (variance != null && variance.abs() > 50000) {
       insights.add(
@@ -2804,6 +3080,530 @@ class LocalPosDatabase {
     if (fraction == '000') return '$whole';
     final trimmed = fraction.replaceFirst(RegExp(r'0+$'), '');
     return '$whole.$trimmed';
+  }
+
+  Future<String> holdSale({
+    required List<SaleLineInput> lines,
+    String? customerId,
+  }) async {
+    if (lines.isEmpty) {
+      throw ArgumentError('Cannot hold an empty bill');
+    }
+    final heldSaleId = _uuid.v4();
+    final heldAt = DateTime.now().toUtc();
+    await _database.transaction((txn) async {
+      if (customerId != null) {
+        final customer = await txn.query(
+          'customer',
+          columns: ['id'],
+          where: 'id = ?',
+          whereArgs: [customerId],
+          limit: 1,
+        );
+        if (customer.isEmpty) {
+          throw StateError('Customer not found');
+        }
+      }
+      await txn.insert('held_sale', {
+        'id': heldSaleId,
+        'customer_id': customerId,
+        'held_at': heldAt.toIso8601String(),
+      });
+      for (final line in lines) {
+        await txn.insert('held_sale_line', {
+          'id': _uuid.v4(),
+          'held_sale_id': heldSaleId,
+          'product_id': line.product.id,
+          'product_name_snapshot': line.product.name,
+          'quantity_milli': line.quantityMilli,
+          'unit_price_minor': line.product.unitPriceMinor,
+          'discount_minor': line.discountMinor,
+          'tax_rate_bps': line.product.taxRateBps,
+          'tax_price_mode': line.product.taxPriceMode == TaxPriceMode.exclusive
+              ? 'exclusive'
+              : 'inclusive',
+        });
+      }
+    });
+    return heldSaleId;
+  }
+
+  Future<HeldSale> _readHeldSale(
+    DatabaseExecutor executor,
+    String heldSaleId,
+  ) async {
+    final headers = await executor.rawQuery(
+      '''
+      SELECT hs.*, c.name AS customer_name
+      FROM held_sale hs
+      LEFT JOIN customer c ON c.id = hs.customer_id
+      WHERE hs.id = ?
+      ''',
+      [heldSaleId],
+    );
+    if (headers.isEmpty) {
+      throw StateError('Held bill not found');
+    }
+    final header = headers.single;
+    final rows = await executor.rawQuery(
+      '''
+      SELECT hsl.*, p.barcode
+      FROM held_sale_line hsl
+      INNER JOIN product p ON p.id = hsl.product_id
+      WHERE hsl.held_sale_id = ?
+      ORDER BY hsl.id
+      ''',
+      [heldSaleId],
+    );
+    return HeldSale(
+      id: heldSaleId,
+      heldAt: DateTime.parse(header['held_at']! as String),
+      customerId: header['customer_id'] as String?,
+      customerName: header['customer_name'] as String?,
+      lines: rows
+          .map(
+            (row) => SaleLineInput(
+              product: Product(
+                id: row['product_id']! as String,
+                name: row['product_name_snapshot']! as String,
+                barcode: row['barcode'] as String?,
+                unitPriceMinor: row['unit_price_minor']! as int,
+                taxRateBps: row['tax_rate_bps']! as int,
+                taxPriceMode: row['tax_price_mode'] == 'exclusive'
+                    ? TaxPriceMode.exclusive
+                    : TaxPriceMode.inclusive,
+              ),
+              quantityMilli: row['quantity_milli']! as int,
+              discountMinor: row['discount_minor']! as int,
+            ),
+          )
+          .toList(),
+    );
+  }
+
+  Future<List<HeldSale>> listHeldSales() async {
+    final rows = await _database.query(
+      'held_sale',
+      columns: ['id'],
+      orderBy: 'held_at DESC',
+    );
+    final result = <HeldSale>[];
+    for (final row in rows) {
+      result.add(await _readHeldSale(_database, row['id']! as String));
+    }
+    return result;
+  }
+
+  Future<HeldSale> resumeHeldSale(String heldSaleId) {
+    return _database.transaction((txn) async {
+      final held = await _readHeldSale(txn, heldSaleId);
+      await txn.delete(
+        'held_sale',
+        where: 'id = ?',
+        whereArgs: [heldSaleId],
+      );
+      return held;
+    });
+  }
+
+  Future<List<ReturnableSale>> listReturnableSales({
+    String query = '',
+    int limit = 50,
+  }) async {
+    final trimmed = query.trim();
+    final saleRows = await _database.rawQuery(
+      '''
+      SELECT
+        s.id,
+        s.invoice_number,
+        s.local_created_at,
+        s.total_minor,
+        s.customer_id,
+        c.name AS customer_name,
+        p.method AS payment_method
+      FROM sale s
+      INNER JOIN payment p ON p.sale_id = s.id
+      LEFT JOIN customer c ON c.id = s.customer_id
+      WHERE (? = '' OR s.invoice_number LIKE ? OR c.name LIKE ?)
+      ORDER BY s.local_created_at DESC
+      LIMIT ?
+      ''',
+      [trimmed, '%$trimmed%', '%$trimmed%', limit],
+    );
+
+    final result = <ReturnableSale>[];
+    for (final sale in saleRows) {
+      final saleId = sale['id']! as String;
+      final lineRows = await _database.rawQuery(
+        '''
+        SELECT
+          sl.*,
+          COALESCE((
+            SELECT SUM(srl.quantity_milli)
+            FROM sale_return_line srl
+            INNER JOIN sale_return sr ON sr.id = srl.sale_return_id
+            WHERE srl.sale_line_id = sl.id
+              AND sr.status = 'finalized'
+          ), 0) AS returned_quantity_milli
+        FROM sale_line sl
+        WHERE sl.sale_id = ?
+        ORDER BY sl.id
+        ''',
+        [saleId],
+      );
+      final lines = lineRows
+          .map(
+            (row) => ReturnableSaleLine(
+              saleLineId: row['id']! as String,
+              productId: row['product_id']! as String,
+              productName: row['product_name_snapshot']! as String,
+              soldQuantityMilli: row['quantity_milli']! as int,
+              returnedQuantityMilli:
+                  row['returned_quantity_milli']! as int,
+              taxableMinor: row['taxable_minor']! as int,
+              cgstMinor: row['cgst_minor']! as int,
+              sgstMinor: row['sgst_minor']! as int,
+              igstMinor: row['igst_minor']! as int,
+              taxMinor: row['tax_minor']! as int,
+              totalMinor: row['total_minor']! as int,
+            ),
+          )
+          .where((line) => line.remainingQuantityMilli > 0)
+          .toList();
+      if (lines.isEmpty) continue;
+      result.add(
+        ReturnableSale(
+          saleId: saleId,
+          invoiceNumber: sale['invoice_number']! as String,
+          createdAt: DateTime.parse(sale['local_created_at']! as String),
+          totalMinor: sale['total_minor']! as int,
+          paymentMethod: sale['payment_method']! as String,
+          customerId: sale['customer_id'] as String?,
+          customerName: sale['customer_name'] as String?,
+          lines: lines,
+        ),
+      );
+    }
+    return result;
+  }
+
+  Future<int> _saleCreditOutstanding(
+    DatabaseExecutor executor, {
+    required String customerId,
+    required String saleId,
+  }) async {
+    final rows = await executor.query(
+      'customer_credit_entry',
+      where: 'customer_id = ?',
+      whereArgs: [customerId],
+      orderBy: 'occurred_at, id',
+    );
+    final charges = <Map<String, Object?>>[];
+
+    void applyFifo(int amount) {
+      var remaining = amount;
+      for (final charge in charges) {
+        if (remaining <= 0) break;
+        final open = charge['remaining']! as int;
+        if (open <= 0) continue;
+        final applied = open < remaining ? open : remaining;
+        charge['remaining'] = open - applied;
+        remaining -= applied;
+      }
+    }
+
+    for (final row in rows) {
+      final type = row['entry_type']! as String;
+      final amount = row['amount_minor']! as int;
+      final linkedSaleId = row['sale_id'] as String?;
+      if (type == 'charge' || type == 'correction_increase') {
+        charges.add({
+          'sale_id': linkedSaleId,
+          'remaining': amount,
+        });
+      } else if (type == 'correction_decrease' && linkedSaleId != null) {
+        var remaining = amount;
+        for (final charge in charges) {
+          if (remaining <= 0) break;
+          if (charge['sale_id'] != linkedSaleId) continue;
+          final open = charge['remaining']! as int;
+          final applied = open < remaining ? open : remaining;
+          charge['remaining'] = open - applied;
+          remaining -= applied;
+        }
+        if (remaining > 0) applyFifo(remaining);
+      } else {
+        applyFifo(amount);
+      }
+    }
+
+    return charges
+        .where((charge) => charge['sale_id'] == saleId)
+        .fold<int>(0, (sum, charge) => sum + (charge['remaining']! as int));
+  }
+
+  Future<OfflineReturnResult> processReturn({
+    required LocalSaleContext context,
+    required String saleId,
+    required List<ReturnLineRequest> requests,
+    required String reason,
+    int cashierApprovalThresholdMinor = 500000,
+  }) async {
+    if (requests.isEmpty || reason.trim().isEmpty) {
+      throw ArgumentError('Return items and reason are required');
+    }
+    final returnId = _uuid.v4();
+    final idempotencyKey = _uuid.v4();
+    final now = DateTime.now().toUtc();
+    late String returnNumber;
+    late int refundMinor;
+    var cashRefundMinor = 0;
+    var creditReversalMinor = 0;
+
+    await _database.transaction((txn) async {
+      final sales = await txn.rawQuery(
+        '''
+        SELECT
+          s.*,
+          p.method AS payment_method,
+          c.name AS customer_name
+        FROM sale s
+        INNER JOIN payment p ON p.sale_id = s.id
+        LEFT JOIN customer c ON c.id = s.customer_id
+        WHERE s.id = ?
+        LIMIT 1
+        ''',
+        [saleId],
+      );
+      if (sales.isEmpty) {
+        throw StateError('Original bill not found');
+      }
+      final sale = sales.single;
+
+      final employeeRows = await txn.query(
+        'employee',
+        columns: ['role'],
+        where: 'id = ? AND active = 1',
+        whereArgs: [context.userId],
+        limit: 1,
+      );
+      if (employeeRows.isEmpty) {
+        throw StateError('Active cashier identity not found');
+      }
+      final role = employeeRows.single['role']! as String;
+
+      final prepared = <Map<String, Object?>>[];
+      var total = 0;
+      for (final request in requests) {
+        final lines = await txn.query(
+          'sale_line',
+          where: 'id = ? AND sale_id = ?',
+          whereArgs: [request.saleLineId, saleId],
+          limit: 1,
+        );
+        if (lines.isEmpty) {
+          throw StateError('Sale item not found');
+        }
+        final line = lines.single;
+        final returnedRows = await txn.rawQuery(
+          '''
+          SELECT COALESCE(SUM(srl.quantity_milli), 0) AS quantity_milli
+          FROM sale_return_line srl
+          INNER JOIN sale_return sr ON sr.id = srl.sale_return_id
+          WHERE srl.sale_line_id = ? AND sr.status = 'finalized'
+          ''',
+          [request.saleLineId],
+        );
+        final soldQuantity = line['quantity_milli']! as int;
+        final alreadyReturned =
+            returnedRows.single['quantity_milli']! as int;
+        final remaining = soldQuantity - alreadyReturned;
+        if (request.quantityMilli <= 0 || request.quantityMilli > remaining) {
+          throw StateError('Return quantity exceeds what was sold');
+        }
+
+        int prorate(String column) => prorateReturnMinor(
+              originalMinor: line[column]! as int,
+              partQuantityMilli: request.quantityMilli,
+              originalQuantityMilli: soldQuantity,
+            );
+
+        final item = <String, Object?>{
+          'sale_line_id': request.saleLineId,
+          'product_id': line['product_id'],
+          'quantity_milli': request.quantityMilli,
+          'taxable_minor': prorate('taxable_minor'),
+          'cgst_minor': prorate('cgst_minor'),
+          'sgst_minor': prorate('sgst_minor'),
+          'igst_minor': prorate('igst_minor'),
+          'tax_minor': prorate('tax_minor'),
+          'total_minor': prorate('total_minor'),
+        };
+        total += item['total_minor']! as int;
+        prepared.add(item);
+      }
+
+      if (role == 'cashier' && total > cashierApprovalThresholdMinor) {
+        throw StateError('Manager approval is required for this refund');
+      }
+      if (role == 'stock_worker') {
+        throw StateError('This role cannot refund sales');
+      }
+
+      final sequenceRows = await txn.query(
+        'return_sequence',
+        columns: ['next_return'],
+        where: 'terminal_code = ?',
+        whereArgs: [context.terminalCode],
+        limit: 1,
+      );
+      if (sequenceRows.isEmpty) {
+        throw StateError('Return sequence is missing');
+      }
+      final nextReturn = sequenceRows.single['next_return']! as int;
+      returnNumber =
+          'R-${context.terminalCode}-${nextReturn.toString().padLeft(6, '0')}';
+      await txn.update(
+        'return_sequence',
+        {'next_return': nextReturn + 1},
+        where: 'terminal_code = ?',
+        whereArgs: [context.terminalCode],
+      );
+
+      refundMinor = total;
+      final paymentMethod = sale['payment_method']! as String;
+      if (paymentMethod == 'cash') {
+        cashRefundMinor = total;
+      } else if (paymentMethod == 'customer_credit') {
+        final customerId = sale['customer_id'] as String?;
+        if (customerId == null) {
+          throw StateError('Credit sale customer is missing');
+        }
+        final outstanding = await _saleCreditOutstanding(
+          txn,
+          customerId: customerId,
+          saleId: saleId,
+        );
+        creditReversalMinor = outstanding < total ? outstanding : total;
+        cashRefundMinor = total - creditReversalMinor;
+      } else {
+        throw StateError(
+          'Provider refund is not configured for this payment method',
+        );
+      }
+
+      await txn.insert('sale_return', {
+        'id': returnId,
+        'sale_id': saleId,
+        'return_number': returnNumber,
+        'reason': reason.trim(),
+        'total_refund_minor': total,
+        'status': 'finalized',
+        'returned_at': now.toIso8601String(),
+        'idempotency_key': idempotencyKey,
+      });
+
+      for (final item in prepared) {
+        await txn.insert('sale_return_line', {
+          'id': _uuid.v4(),
+          'sale_return_id': returnId,
+          ...item,
+        });
+        await txn.insert('stock_movement', {
+          'id': _uuid.v4(),
+          'product_id': item['product_id'],
+          'movement_type': 'return_in',
+          'quantity_delta_milli': item['quantity_milli'],
+          'reason': reason.trim(),
+          'source_entity_type': 'sale_return',
+          'source_entity_id': returnId,
+          'occurred_at': now.toIso8601String(),
+          'idempotency_key':
+              'sale-return:$returnId:${item['sale_line_id']}',
+        });
+      }
+
+      final shiftId = await _openShiftId(txn);
+      if (creditReversalMinor > 0) {
+        final customerId = sale['customer_id']! as String;
+        final entryId = _uuid.v4();
+        await txn.insert('customer_credit_entry', {
+          'id': entryId,
+          'customer_id': customerId,
+          'entry_type': 'correction_decrease',
+          'amount_minor': creditReversalMinor,
+          'sale_id': saleId,
+          'note': 'Return $returnNumber',
+          'occurred_at': now.toIso8601String(),
+          'idempotency_key': 'credit-return:$returnId',
+        });
+        await txn.insert('refund', {
+          'id': _uuid.v4(),
+          'sale_return_id': returnId,
+          'method': 'customer_credit',
+          'amount_minor': creditReversalMinor,
+          'status': 'captured',
+          'created_at': now.toIso8601String(),
+          'idempotency_key': 'refund-credit:$returnId',
+        });
+      }
+      if (cashRefundMinor > 0) {
+        await txn.insert('refund', {
+          'id': _uuid.v4(),
+          'sale_return_id': returnId,
+          'shift_id': shiftId,
+          'method': 'cash',
+          'amount_minor': cashRefundMinor,
+          'status': 'captured',
+          'created_at': now.toIso8601String(),
+          'idempotency_key': 'refund-cash:$returnId',
+        });
+      }
+
+      await txn.insert('sync_outbox', {
+        'id': _uuid.v4(),
+        'entity_type': 'sale_return',
+        'entity_id': returnId,
+        'organization_id': context.organizationId,
+        'business_id': context.businessId,
+        'store_id': context.storeId,
+        'terminal_id': context.terminalId,
+        'idempotency_key': idempotencyKey,
+        'payload_json': jsonEncode({
+          'saleReturnId': returnId,
+          'saleId': saleId,
+          'returnNumber': returnNumber,
+          'reason': reason.trim(),
+          'returnedAt': now.toIso8601String(),
+          'refundMinor': total,
+          'cashRefundMinor': cashRefundMinor,
+          'creditReversalMinor': creditReversalMinor,
+          'lines': prepared,
+        }),
+        'state': 'pending',
+        'created_at': now.toIso8601String(),
+      });
+    });
+
+    return OfflineReturnResult(
+      returnId: returnId,
+      returnNumber: returnNumber,
+      refundMinor: refundMinor,
+      cashRefundMinor: cashRefundMinor,
+      creditReversalMinor: creditReversalMinor,
+    );
+  }
+
+  Future<int> returnCountForSale(String saleId) async {
+    final rows = await _database.rawQuery(
+      '''
+      SELECT COUNT(*) AS count
+      FROM sale_return
+      WHERE sale_id = ? AND status = 'finalized'
+      ''',
+      [saleId],
+    );
+    return rows.single['count']! as int;
   }
 
   Future<int> pendingOutboxCount() async {
@@ -3053,6 +3853,29 @@ class LocalPosDatabase {
         );
         if (customers.isEmpty) {
           throw StateError('Customer not found');
+        }
+      }
+
+      final employeeRows = await txn.query(
+        'employee',
+        columns: ['role'],
+        where: 'id = ? AND active = 1',
+        whereArgs: [context.userId],
+        limit: 1,
+      );
+      if (employeeRows.isEmpty) {
+        throw StateError('Active cashier identity not found');
+      }
+      final actorRole = employeeRows.single['role']! as String;
+      for (final input in lines) {
+        final grossMinor =
+            (input.product.unitPriceMinor * input.quantityMilli + 500) ~/ 1000;
+        if (discountRequiresApproval(
+          lineGrossMinor: grossMinor,
+          discountMinor: input.discountMinor,
+          actorRole: actorRole,
+        )) {
+          throw StateError('Manager approval is required for this discount');
         }
       }
 

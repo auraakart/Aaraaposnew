@@ -8,6 +8,7 @@ class BusinessMetrics {
     required this.moneyReceivedMinor,
     required this.moneyDueMinor,
     required this.expensesMinor,
+    required this.refundsMinor,
     required this.lowStockCount,
     required this.costCoverageBps,
     required this.previousComparableSalesMinor,
@@ -21,6 +22,7 @@ class BusinessMetrics {
   final int moneyReceivedMinor;
   final int moneyDueMinor;
   final int expensesMinor;
+  final int refundsMinor;
   final int lowStockCount;
   final int costCoverageBps;
   final int previousComparableSalesMinor;

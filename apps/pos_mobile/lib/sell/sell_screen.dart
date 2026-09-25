@@ -3,7 +3,10 @@ import 'package:flutter/material.dart';
 import '../customers/customer_domain.dart';
 import '../payments/payment_domain.dart';
 import '../payments/payment_method_sheet.dart';
+import 'barcode_scanner_screen.dart';
 import 'local_pos_database.dart';
+import 'receipt_output.dart';
+import 'return_domain.dart';
 import 'sale_domain.dart';
 
 class SellScreen extends StatefulWidget {
@@ -23,6 +26,7 @@ class SellScreen extends StatefulWidget {
 class _SellScreenState extends State<SellScreen> {
   final searchController = TextEditingController();
   final Map<String, int> quantitiesMilli = {};
+  final Map<String, int> discountsMinor = {};
   final Map<String, Product> cartProducts = {};
   List<Product> products = const [];
   bool loading = true;
@@ -59,7 +63,13 @@ class _SellScreenState extends State<SellScreen> {
     for (final entry in quantitiesMilli.entries) {
       final product = cartProducts[entry.key];
       if (product != null && entry.value > 0) {
-        lines.add(SaleLineInput(product: product, quantityMilli: entry.value));
+        lines.add(
+          SaleLineInput(
+            product: product,
+            quantityMilli: entry.value,
+            discountMinor: discountsMinor[entry.key] ?? 0,
+          ),
+        );
       }
     }
     return lines;
@@ -89,6 +99,7 @@ class _SellScreenState extends State<SellScreen> {
       final next = (quantitiesMilli[product.id] ?? 0) - 1000;
       if (next <= 0) {
         quantitiesMilli.remove(product.id);
+        discountsMinor.remove(product.id);
         cartProducts.remove(product.id);
       } else {
         quantitiesMilli[product.id] = next;
@@ -200,6 +211,167 @@ class _SellScreenState extends State<SellScreen> {
     }
   }
 
+  Future<void> scanBarcode() async {
+    final barcode = await Navigator.of(context).push<String>(
+      MaterialPageRoute<String>(
+        builder: (_) => const BarcodeScannerScreen(),
+      ),
+    );
+    if (!mounted || barcode == null) return;
+
+    final matches = await widget.database.listProducts(query: barcode);
+    if (!mounted) return;
+    if (matches.length == 1) {
+      add(matches.single);
+      searchController.clear();
+      await refreshProducts();
+      return;
+    }
+    searchController.text = barcode;
+    await refreshProducts(barcode);
+    if (matches.isEmpty && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('No product found for this barcode.')),
+      );
+    }
+  }
+
+  Future<void> setDiscount(Product product) async {
+    final quantity = quantitiesMilli[product.id] ?? 0;
+    if (quantity <= 0) return;
+    final grossMinor =
+        (product.unitPriceMinor * quantity + 500) ~/ 1000;
+    final controller = TextEditingController(
+      text: (discountsMinor[product.id] ?? 0) == 0
+          ? ''
+          : ((discountsMinor[product.id] ?? 0) / 100).toStringAsFixed(2),
+    );
+    final result = await showDialog<int>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: Text('Discount • ${product.name}'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text('Line amount ${formatInr(grossMinor)}'),
+            const SizedBox(height: 12),
+            TextField(
+              controller: controller,
+              autofocus: true,
+              keyboardType:
+                  const TextInputType.numberWithOptions(decimal: true),
+              decoration: const InputDecoration(
+                labelText: 'Discount ₹',
+                border: OutlineInputBorder(),
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, 0),
+            child: const Text('Remove discount'),
+          ),
+          FilledButton(
+            onPressed: () {
+              final value = parseRupeesToMinor(controller.text);
+              if (value == null || value > grossMinor) return;
+              Navigator.pop(dialogContext, value);
+            },
+            child: const Text('Apply'),
+          ),
+        ],
+      ),
+    );
+    controller.dispose();
+    if (result == null || !mounted) return;
+    setState(() => discountsMinor[product.id] = result);
+  }
+
+  Future<void> holdCurrentSale() async {
+    final lines = cartLines;
+    if (lines.isEmpty) return;
+    await widget.database.holdSale(
+      lines: lines,
+      customerId: selectedCustomer?.id,
+    );
+    if (!mounted) return;
+    setState(() {
+      quantitiesMilli.clear();
+      discountsMinor.clear();
+      cartProducts.clear();
+      selectedCustomer = null;
+    });
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Bill held. You can resume it later.')),
+    );
+  }
+
+  Future<void> resumeHeldSale() async {
+    final held = await widget.database.listHeldSales();
+    if (!mounted) return;
+    if (held.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('No held bills.')),
+      );
+      return;
+    }
+
+    final selected = await showDialog<HeldSale>(
+      context: context,
+      builder: (dialogContext) => SimpleDialog(
+        title: const Text('Resume held bill'),
+        children: [
+          for (final sale in held)
+            SimpleDialogOption(
+              onPressed: () => Navigator.pop(dialogContext, sale),
+              child: ListTile(
+                leading: const Icon(Icons.pause_circle_outline),
+                title: Text(
+                  sale.customerName == null
+                      ? 'Guest bill'
+                      : sale.customerName!,
+                ),
+                subtitle: Text(
+                  '${sale.lines.length} item'
+                  '${sale.lines.length == 1 ? '' : 's'} • '
+                  '${sale.heldAt.toLocal()}',
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
+    if (selected == null) return;
+    final resumed = await widget.database.resumeHeldSale(selected.id);
+    LocalCustomer? customer;
+    if (resumed.customerId != null) {
+      final matches = await widget.database.listCustomers();
+      for (final item in matches) {
+        if (item.id == resumed.customerId) {
+          customer = item;
+          break;
+        }
+      }
+    }
+    if (!mounted) return;
+    setState(() {
+      quantitiesMilli.clear();
+      discountsMinor.clear();
+      cartProducts.clear();
+      for (final line in resumed.lines) {
+        cartProducts[line.product.id] = line.product;
+        quantitiesMilli[line.product.id] = line.quantityMilli;
+        discountsMinor[line.product.id] = line.discountMinor;
+      }
+      selectedCustomer = customer;
+    });
+  }
+
   Future<void> chooseCustomer() async {
     final customers = await widget.database.listCustomers();
     if (!mounted) return;
@@ -276,6 +448,7 @@ class _SellScreenState extends State<SellScreen> {
     if (!mounted) return;
     setState(() {
       quantitiesMilli.clear();
+      discountsMinor.clear();
       cartProducts.clear();
       selectedCustomer = null;
     });
@@ -288,6 +461,24 @@ class _SellScreenState extends State<SellScreen> {
         title: Text(title),
         content: SelectableText(result.receiptText),
         actions: [
+          TextButton.icon(
+            onPressed: () async {
+              await ClipboardReceiptOutputAdapter().output(result.receiptText);
+              if (dialogContext.mounted) {
+                ScaffoldMessenger.of(dialogContext).showSnackBar(
+                  const SnackBar(content: Text('Receipt copied.')),
+                );
+              }
+            },
+            icon: const Icon(Icons.copy_outlined),
+            label: const Text('Copy'),
+          ),
+          TextButton.icon(
+            onPressed: () =>
+                SystemShareReceiptOutputAdapter().output(result.receiptText),
+            icon: const Icon(Icons.share_outlined),
+            label: const Text('Share'),
+          ),
           FilledButton(
             onPressed: () => Navigator.pop(dialogContext),
             child: const Text('New sale'),
@@ -473,6 +664,12 @@ class _SellScreenState extends State<SellScreen> {
               ),
               const SizedBox(width: 8),
               IconButton.filledTonal(
+                tooltip: 'Scan barcode',
+                onPressed: scanBarcode,
+                icon: const Icon(Icons.qr_code_scanner),
+              ),
+              const SizedBox(width: 8),
+              IconButton.filledTonal(
                 tooltip: 'Add product',
                 onPressed: showAddProduct,
                 icon: const Icon(Icons.add),
@@ -482,17 +679,30 @@ class _SellScreenState extends State<SellScreen> {
         ),
         Padding(
           padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
-          child: Align(
-            alignment: Alignment.centerLeft,
-            child: OutlinedButton.icon(
-              onPressed: chooseCustomer,
-              icon: const Icon(Icons.person_outline),
-              label: Text(
-                selectedCustomer == null
-                    ? 'Guest customer'
-                    : selectedCustomer!.name,
+          child: Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              OutlinedButton.icon(
+                onPressed: chooseCustomer,
+                icon: const Icon(Icons.person_outline),
+                label: Text(
+                  selectedCustomer == null
+                      ? 'Guest customer'
+                      : selectedCustomer!.name,
+                ),
               ),
-            ),
+              OutlinedButton.icon(
+                onPressed: totals == null ? null : holdCurrentSale,
+                icon: const Icon(Icons.pause_circle_outline),
+                label: const Text('Hold'),
+              ),
+              OutlinedButton.icon(
+                onPressed: resumeHeldSale,
+                icon: const Icon(Icons.play_circle_outline),
+                label: const Text('Resume'),
+              ),
+            ],
           ),
         ),
         if (pendingSync > 0)
@@ -580,7 +790,21 @@ class _SellScreenState extends State<SellScreen> {
                                             Icons.add_circle_outline,
                                           ),
                                         ),
+                                        IconButton(
+                                          tooltip: 'Discount',
+                                          onPressed: () => setDiscount(product),
+                                          icon: const Icon(
+                                            Icons.percent_outlined,
+                                          ),
+                                        ),
                                       ],
+                                    ),
+                                  if ((discountsMinor[product.id] ?? 0) > 0)
+                                    Text(
+                                      'Discount ${formatInr(discountsMinor[product.id]!)}',
+                                      style: Theme.of(context)
+                                          .textTheme
+                                          .labelMedium,
                                     ),
                                 ],
                               ),

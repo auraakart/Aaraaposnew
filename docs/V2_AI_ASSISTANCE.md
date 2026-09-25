@@ -59,7 +59,7 @@ The repository-achievable V2 foundation currently identifies deterministic excep
 - material sales change versus the comparable prior period
 - purchase/stock coverage exceptions
 
-Refund-specific anomaly detection requires a full return/refund transaction ledger and is not falsely claimed here.
+V2.1 adds the return/refund transaction ledger and deterministic refund-activity anomaly detection with inspectable evidence.
 
 ## AI safety and data integrity
 
@@ -88,7 +88,6 @@ Not claimed in V2:
 - production LLM provider
 - voice speech-to-text provider
 - autonomous financial actions
-- refund anomaly intelligence without a refund ledger
 - production campaign sending
 - ML forecasting model certification
 - cross-store AI aggregation
