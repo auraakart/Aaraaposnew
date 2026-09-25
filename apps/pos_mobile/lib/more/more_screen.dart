@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../operations/operations_screen.dart';
 import '../purchases/purchases_screen.dart';
 import '../sell/local_pos_database.dart';
 
@@ -18,6 +19,29 @@ class MoreScreen extends StatelessWidget {
     return ListView(
       padding: const EdgeInsets.all(16),
       children: [
+        Card(
+          child: ListTile(
+            leading: const Icon(Icons.storefront_outlined),
+            title: const Text('Store Operations'),
+            subtitle: const Text(
+              'Employees, shifts, drawer cash and expenses',
+            ),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () {
+              Navigator.of(context).push(
+                MaterialPageRoute<void>(
+                  builder: (_) => Scaffold(
+                    appBar: AppBar(title: const Text('Store Operations')),
+                    body: OperationsScreen(
+                      database: database,
+                      saleContext: saleContext,
+                    ),
+                  ),
+                ),
+              );
+            },
+          ),
+        ),
         Card(
           child: ListTile(
             leading: const Icon(Icons.local_shipping_outlined),
