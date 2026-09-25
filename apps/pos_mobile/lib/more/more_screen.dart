@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../accounting/accounting_export_screen.dart';
 import '../loyalty/loyalty_promotions_screen.dart';
 import '../multistore/store_scope_screen.dart';
 import '../operations/operations_screen.dart';
@@ -23,6 +24,26 @@ class MoreScreen extends StatelessWidget {
     return ListView(
       padding: const EdgeInsets.all(16),
       children: [
+        Card(
+          child: ListTile(
+            leading: const Icon(Icons.table_view_outlined),
+            title: const Text('Accounting Export'),
+            subtitle: const Text(
+              'Sales, tax, purchases, expenses and settlement registers',
+            ),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () {
+              Navigator.of(context).push(
+                MaterialPageRoute<void>(
+                  builder: (_) => Scaffold(
+                    appBar: AppBar(title: const Text('Accounting Export')),
+                    body: AccountingExportScreen(database: database),
+                  ),
+                ),
+              );
+            },
+          ),
+        ),
         Card(
           child: ListTile(
             leading: const Icon(Icons.hub_outlined),
