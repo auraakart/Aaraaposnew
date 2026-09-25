@@ -4,6 +4,7 @@ import 'package:path/path.dart' as p;
 import 'package:sqflite/sqflite.dart';
 import 'package:uuid/uuid.dart';
 
+import '../customers/customer_domain.dart';
 import '../inventory/inventory_domain.dart';
 import 'sale_domain.dart';
 
@@ -81,7 +82,7 @@ class LocalPosDatabase {
     _db = await _factory.openDatabase(
       path,
       options: OpenDatabaseOptions(
-        version: 3,
+        version: 4,
         onCreate: (db, version) async {
           await db.execute('''
             CREATE TABLE local_context (
@@ -111,6 +112,16 @@ class LocalPosDatabase {
             )
           ''');
           await db.execute('''
+            CREATE TABLE customer (
+              id TEXT PRIMARY KEY,
+              name TEXT NOT NULL,
+              mobile_e164 TEXT,
+              communication_consent TEXT NOT NULL DEFAULT 'unknown',
+              created_at TEXT NOT NULL,
+              updated_at TEXT NOT NULL
+            )
+          ''');
+          await db.execute('''
             CREATE TABLE terminal_sequence (
               terminal_code TEXT PRIMARY KEY,
               next_invoice INTEGER NOT NULL
@@ -124,6 +135,7 @@ class LocalPosDatabase {
               store_id TEXT NOT NULL,
               terminal_id TEXT NOT NULL,
               cashier_user_id TEXT NOT NULL,
+              customer_id TEXT REFERENCES customer(id),
               invoice_number TEXT NOT NULL UNIQUE,
               local_created_at TEXT NOT NULL,
               subtotal_minor INTEGER NOT NULL,
@@ -176,6 +188,20 @@ class LocalPosDatabase {
               amount_minor INTEGER NOT NULL,
               occurred_at TEXT NOT NULL,
               metadata_json TEXT NOT NULL DEFAULT '{}'
+            )
+          ''');
+          await db.execute('''
+            CREATE TABLE customer_credit_entry (
+              id TEXT PRIMARY KEY,
+              customer_id TEXT NOT NULL REFERENCES customer(id),
+              entry_type TEXT NOT NULL,
+              amount_minor INTEGER NOT NULL CHECK (amount_minor > 0),
+              sale_id TEXT REFERENCES sale(id),
+              collection_method TEXT,
+              due_date TEXT,
+              note TEXT,
+              occurred_at TEXT NOT NULL,
+              idempotency_key TEXT NOT NULL UNIQUE
             )
           ''');
           await db.execute('''
@@ -248,6 +274,35 @@ class LocalPosDatabase {
                 reason TEXT,
                 source_entity_type TEXT,
                 source_entity_id TEXT,
+                occurred_at TEXT NOT NULL,
+                idempotency_key TEXT NOT NULL UNIQUE
+              )
+            ''');
+          }
+          if (oldVersion < 4) {
+            await db.execute('''
+              CREATE TABLE customer (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                mobile_e164 TEXT,
+                communication_consent TEXT NOT NULL DEFAULT 'unknown',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+              )
+            ''');
+            await db.execute(
+              "ALTER TABLE sale ADD COLUMN customer_id TEXT REFERENCES customer(id)",
+            );
+            await db.execute('''
+              CREATE TABLE customer_credit_entry (
+                id TEXT PRIMARY KEY,
+                customer_id TEXT NOT NULL REFERENCES customer(id),
+                entry_type TEXT NOT NULL,
+                amount_minor INTEGER NOT NULL CHECK (amount_minor > 0),
+                sale_id TEXT REFERENCES sale(id),
+                collection_method TEXT,
+                due_date TEXT,
+                note TEXT,
                 occurred_at TEXT NOT NULL,
                 idempotency_key TEXT NOT NULL UNIQUE
               )
