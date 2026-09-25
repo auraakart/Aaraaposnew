@@ -32,6 +32,7 @@ class AccountingExportRow {
     required this.sourceId,
     required this.occurredAt,
     required this.description,
+    required this.balanceEffect,
     required this.grossMinor,
     required this.discountMinor,
     required this.tax,
@@ -48,6 +49,7 @@ class AccountingExportRow {
   final DateTime occurredAt;
   final String? partyName;
   final String description;
+  final String balanceEffect;
   final int grossMinor;
   final int discountMinor;
   final AccountingTaxBreakdown tax;
@@ -160,16 +162,22 @@ AccountingExportManifest buildAccountingManifest(
     switch (row.kind) {
       case AccountingRegisterKind.sales:
         sales += row.totalMinor;
+        break;
       case AccountingRegisterKind.returns:
         returns += row.totalMinor;
+        break;
       case AccountingRegisterKind.purchases:
         purchases += row.totalMinor;
+        break;
       case AccountingRegisterKind.expenses:
         expenses += row.totalMinor;
+        break;
       case AccountingRegisterKind.customerCredit:
         customerCredit += row.totalMinor;
+        break;
       case AccountingRegisterKind.supplierLedger:
         supplierLedger += row.totalMinor;
+        break;
     }
   }
 
@@ -197,6 +205,7 @@ String accountingRowsToCsv(List<AccountingExportRow> rows) {
     'Occurred At',
     'Party',
     'Description',
+    'Balance Effect',
     'Gross',
     'Discount',
     'Taxable',
@@ -220,6 +229,7 @@ String accountingRowsToCsv(List<AccountingExportRow> rows) {
         row.occurredAt.toUtc().toIso8601String(),
         row.partyName ?? '',
         row.description,
+        row.balanceEffect,
         _moneyDecimal(row.grossMinor),
         _moneyDecimal(row.discountMinor),
         _moneyDecimal(row.tax.taxableMinor),
