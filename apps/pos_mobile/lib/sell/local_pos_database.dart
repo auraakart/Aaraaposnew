@@ -4,6 +4,7 @@ import 'package:path/path.dart' as p;
 import 'package:sqflite/sqflite.dart';
 import 'package:uuid/uuid.dart';
 
+import '../accounting/accounting_domain.dart';
 import '../ai/ai_domain.dart';
 import '../customers/customer_domain.dart';
 import '../intelligence/owner_intelligence.dart';
@@ -2565,6 +2566,319 @@ class LocalPosDatabase {
       "SELECT COUNT(*) AS count FROM approval_request WHERE status = 'pending'",
     );
     return (rows.single['count'] as int?) ?? 0;
+  }
+
+  Future<List<AccountingExportRow>> accountingExportRows(
+    ReportPeriod period, {
+    DateTime? now,
+  }) async {
+    final reference = now ?? DateTime.now();
+    final range = periodRange(period, reference);
+    final start = range.start.toUtc().toIso8601String();
+    final end = range.end.toUtc().toIso8601String();
+    final rows = <AccountingExportRow>[];
+
+    final sales = await _database.rawQuery(
+      '''
+      SELECT
+        s.id,
+        s.invoice_number,
+        s.local_created_at,
+        s.status,
+        c.name AS party_name,
+        p.method AS payment_method,
+        COALESCE(SUM(sl.gross_minor), 0) AS gross_minor,
+        COALESCE(SUM(sl.discount_minor), 0) AS discount_minor,
+        COALESCE(SUM(sl.taxable_minor), 0) AS taxable_minor,
+        COALESCE(SUM(sl.cgst_minor), 0) AS cgst_minor,
+        COALESCE(SUM(sl.sgst_minor), 0) AS sgst_minor,
+        COALESCE(SUM(sl.igst_minor), 0) AS igst_minor,
+        COALESCE(SUM(sl.total_minor), 0) AS total_minor
+      FROM sale s
+      INNER JOIN sale_line sl ON sl.sale_id = s.id
+      LEFT JOIN customer c ON c.id = s.customer_id
+      LEFT JOIN payment p ON p.sale_id = s.id
+      WHERE s.status = 'finalized'
+        AND s.local_created_at >= ?
+        AND s.local_created_at < ?
+      GROUP BY
+        s.id,
+        s.invoice_number,
+        s.local_created_at,
+        s.status,
+        c.name,
+        p.method
+      ORDER BY s.local_created_at
+      ''',
+      [start, end],
+    );
+    for (final row in sales) {
+      rows.add(
+        AccountingExportRow(
+          kind: AccountingRegisterKind.sales,
+          sourceId: row['id']! as String,
+          documentNumber: row['invoice_number']! as String,
+          occurredAt: DateTime.parse(row['local_created_at']! as String),
+          partyName: row['party_name'] as String?,
+          description: 'Retail sale',
+          balanceEffect: 'increase',
+          grossMinor: row['gross_minor']! as int,
+          discountMinor: row['discount_minor']! as int,
+          tax: AccountingTaxBreakdown(
+            taxableMinor: row['taxable_minor']! as int,
+            cgstMinor: row['cgst_minor']! as int,
+            sgstMinor: row['sgst_minor']! as int,
+            igstMinor: row['igst_minor']! as int,
+            unclassifiedTaxMinor: 0,
+          ),
+          totalMinor: row['total_minor']! as int,
+          paymentMethod: row['payment_method'] as String?,
+          status: row['status']! as String,
+        ),
+      );
+    }
+
+    final returns = await _database.rawQuery(
+      '''
+      SELECT
+        sr.id,
+        sr.return_number,
+        sr.returned_at,
+        sr.status,
+        s.invoice_number,
+        c.name AS party_name,
+        COALESCE(SUM(srl.taxable_minor), 0) AS taxable_minor,
+        COALESCE(SUM(srl.cgst_minor), 0) AS cgst_minor,
+        COALESCE(SUM(srl.sgst_minor), 0) AS sgst_minor,
+        COALESCE(SUM(srl.igst_minor), 0) AS igst_minor,
+        COALESCE(SUM(srl.total_minor), 0) AS total_minor
+      FROM sale_return sr
+      INNER JOIN sale_return_line srl ON srl.sale_return_id = sr.id
+      INNER JOIN sale s ON s.id = sr.sale_id
+      LEFT JOIN customer c ON c.id = s.customer_id
+      WHERE sr.status = 'finalized'
+        AND sr.returned_at >= ?
+        AND sr.returned_at < ?
+      GROUP BY
+        sr.id,
+        sr.return_number,
+        sr.returned_at,
+        sr.status,
+        s.invoice_number,
+        c.name
+      ORDER BY sr.returned_at
+      ''',
+      [start, end],
+    );
+    for (final row in returns) {
+      final total = row['total_minor']! as int;
+      rows.add(
+        AccountingExportRow(
+          kind: AccountingRegisterKind.returns,
+          sourceId: row['id']! as String,
+          documentNumber: row['return_number']! as String,
+          occurredAt: DateTime.parse(row['returned_at']! as String),
+          partyName: row['party_name'] as String?,
+          description: 'Return against ${row['invoice_number']}',
+          balanceEffect: 'decrease',
+          grossMinor: total,
+          discountMinor: 0,
+          tax: AccountingTaxBreakdown(
+            taxableMinor: row['taxable_minor']! as int,
+            cgstMinor: row['cgst_minor']! as int,
+            sgstMinor: row['sgst_minor']! as int,
+            igstMinor: row['igst_minor']! as int,
+            unclassifiedTaxMinor: 0,
+          ),
+          totalMinor: total,
+          status: row['status']! as String,
+        ),
+      );
+    }
+
+    final purchases = await _database.rawQuery(
+      '''
+      SELECT
+        pr.id,
+        pr.supplier_invoice_number,
+        pr.received_at,
+        sp.name AS party_name,
+        COALESCE(SUM(prl.line_total_minor), 0) AS total_minor,
+        COALESCE(SUM(prl.tax_minor), 0) AS tax_minor
+      FROM purchase_receipt pr
+      INNER JOIN purchase_receipt_line prl
+        ON prl.purchase_receipt_id = pr.id
+      INNER JOIN supplier sp ON sp.id = pr.supplier_id
+      WHERE pr.received_at >= ?
+        AND pr.received_at < ?
+      GROUP BY
+        pr.id,
+        pr.supplier_invoice_number,
+        pr.received_at,
+        sp.name
+      ORDER BY pr.received_at
+      ''',
+      [start, end],
+    );
+    for (final row in purchases) {
+      final total = row['total_minor']! as int;
+      final tax = row['tax_minor']! as int;
+      rows.add(
+        AccountingExportRow(
+          kind: AccountingRegisterKind.purchases,
+          sourceId: row['id']! as String,
+          documentNumber: row['supplier_invoice_number'] as String?,
+          occurredAt: DateTime.parse(row['received_at']! as String),
+          partyName: row['party_name']! as String,
+          description: 'Purchase receipt',
+          balanceEffect: 'increase',
+          grossMinor: total,
+          discountMinor: 0,
+          tax: AccountingTaxBreakdown(
+            taxableMinor: total - tax,
+            cgstMinor: 0,
+            sgstMinor: 0,
+            igstMinor: 0,
+            unclassifiedTaxMinor: tax,
+          ),
+          totalMinor: total,
+          status: 'received',
+        ),
+      );
+    }
+
+    final expenses = await _database.rawQuery(
+      '''
+      SELECT *
+      FROM expense
+      WHERE occurred_at >= ? AND occurred_at < ?
+      ORDER BY occurred_at
+      ''',
+      [start, end],
+    );
+    for (final row in expenses) {
+      final amount = row['amount_minor']! as int;
+      rows.add(
+        AccountingExportRow(
+          kind: AccountingRegisterKind.expenses,
+          sourceId: row['id']! as String,
+          occurredAt: DateTime.parse(row['occurred_at']! as String),
+          description: row['note'] == null
+              ? row['category']! as String
+              : '${row['category']} • ${row['note']}',
+          balanceEffect: 'increase',
+          grossMinor: amount,
+          discountMinor: 0,
+          tax: const AccountingTaxBreakdown(
+            taxableMinor: 0,
+            cgstMinor: 0,
+            sgstMinor: 0,
+            igstMinor: 0,
+            unclassifiedTaxMinor: 0,
+          ),
+          totalMinor: amount,
+          paymentMethod: row['payment_method']! as String,
+          status: 'recorded',
+        ),
+      );
+    }
+
+    final credit = await _database.rawQuery(
+      '''
+      SELECT
+        ce.*,
+        c.name AS party_name,
+        s.invoice_number
+      FROM customer_credit_entry ce
+      INNER JOIN customer c ON c.id = ce.customer_id
+      LEFT JOIN sale s ON s.id = ce.sale_id
+      WHERE ce.occurred_at >= ?
+        AND ce.occurred_at < ?
+      ORDER BY ce.occurred_at
+      ''',
+      [start, end],
+    );
+    for (final row in credit) {
+      final amount = row['amount_minor']! as int;
+      final type = row['entry_type']! as String;
+      final increase = type == 'charge' || type == 'correction_increase';
+      rows.add(
+        AccountingExportRow(
+          kind: AccountingRegisterKind.customerCredit,
+          sourceId: row['id']! as String,
+          documentNumber: row['invoice_number'] as String?,
+          occurredAt: DateTime.parse(row['occurred_at']! as String),
+          partyName: row['party_name']! as String,
+          description: row['note'] as String? ?? 'Customer credit $type',
+          balanceEffect: increase ? 'increase' : 'decrease',
+          grossMinor: amount,
+          discountMinor: 0,
+          tax: const AccountingTaxBreakdown(
+            taxableMinor: 0,
+            cgstMinor: 0,
+            sgstMinor: 0,
+            igstMinor: 0,
+            unclassifiedTaxMinor: 0,
+          ),
+          totalMinor: amount,
+          paymentMethod: row['collection_method'] as String?,
+          status: type,
+        ),
+      );
+    }
+
+    final supplierLedger = await _database.rawQuery(
+      '''
+      SELECT
+        le.*,
+        sp.name AS party_name
+      FROM supplier_ledger_entry le
+      INNER JOIN supplier sp ON sp.id = le.supplier_id
+      WHERE le.occurred_at >= ?
+        AND le.occurred_at < ?
+      ORDER BY le.occurred_at
+      ''',
+      [start, end],
+    );
+    for (final row in supplierLedger) {
+      final amount = row['amount_minor']! as int;
+      final type = row['entry_type']! as String;
+      final increase =
+          type == 'purchase_charge' || type == 'correction_increase';
+      rows.add(
+        AccountingExportRow(
+          kind: AccountingRegisterKind.supplierLedger,
+          sourceId: row['id']! as String,
+          occurredAt: DateTime.parse(row['occurred_at']! as String),
+          partyName: row['party_name']! as String,
+          description: row['note'] as String? ?? 'Supplier ledger $type',
+          balanceEffect: increase ? 'increase' : 'decrease',
+          grossMinor: amount,
+          discountMinor: 0,
+          tax: const AccountingTaxBreakdown(
+            taxableMinor: 0,
+            cgstMinor: 0,
+            sgstMinor: 0,
+            igstMinor: 0,
+            unclassifiedTaxMinor: 0,
+          ),
+          totalMinor: amount,
+          paymentMethod: row['payment_method'] as String?,
+          status: type,
+        ),
+      );
+    }
+
+    rows.sort((a, b) {
+      final time = a.occurredAt.compareTo(b.occurredAt);
+      if (time != 0) return time;
+      final kind = accountingRegisterValue(a.kind)
+          .compareTo(accountingRegisterValue(b.kind));
+      if (kind != 0) return kind;
+      return a.sourceId.compareTo(b.sourceId);
+    });
+
+    return rows;
   }
 
   Future<BusinessMetrics> businessMetrics(
