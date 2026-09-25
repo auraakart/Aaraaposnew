@@ -2,7 +2,7 @@ import 'package:aaraapos_pos/accounting/accounting_domain.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
-  const sale = AccountingExportRow(
+  final sale = AccountingExportRow(
     kind: AccountingRegisterKind.sales,
     sourceId: 'sale-1',
     documentNumber: 'INV-1',
@@ -27,7 +27,7 @@ void main() {
   test('manifest keeps output GST separate from purchase tax', () {
     final manifest = buildAccountingManifest([
       sale,
-      const AccountingExportRow(
+      AccountingExportRow(
         kind: AccountingRegisterKind.returns,
         sourceId: 'return-1',
         occurredAt: _fixedDate,
@@ -44,7 +44,7 @@ void main() {
         ),
         totalMinor: 11800,
       ),
-      const AccountingExportRow(
+      AccountingExportRow(
         kind: AccountingRegisterKind.purchases,
         sourceId: 'purchase-1',
         occurredAt: _fixedDate,
@@ -80,4 +80,4 @@ void main() {
   });
 }
 
-const _fixedDate = DateTime.utc(2026, 9, 25, 10);
+final _fixedDate = DateTime.utc(2026, 9, 25, 10);
