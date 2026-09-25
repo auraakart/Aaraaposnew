@@ -819,14 +819,73 @@ class LocalPosDatabase {
     required LocalSaleContext context,
     required List<SaleLineInput> lines,
     required int tenderedMinor,
+  }) {
+    return _finalizeSale(
+      context: context,
+      lines: lines,
+      paymentMethod: 'cash',
+      tenderedMinor: tenderedMinor,
+    );
+  }
+
+  Future<OfflineSaleResult> finalizeCustomerCreditSale({
+    required LocalSaleContext context,
+    required List<SaleLineInput> lines,
+    required String customerId,
+    DateTime? dueDate,
+  }) {
+    return _finalizeSale(
+      context: context,
+      lines: lines,
+      paymentMethod: 'customer_credit',
+      customerId: customerId,
+      dueDate: dueDate,
+    );
+  }
+
+  Future<OfflineSaleResult> _finalizeSale({
+    required LocalSaleContext context,
+    required List<SaleLineInput> lines,
+    required String paymentMethod,
+    int? tenderedMinor,
+    String? customerId,
+    DateTime? dueDate,
   }) async {
     final totals = priceSale(lines, context.taxMode);
-    final changeMinor = cashChangeDue(totals.totalMinor, tenderedMinor);
+    final isCash = paymentMethod == 'cash';
+    final isCredit = paymentMethod == 'customer_credit';
+    if (!isCash && !isCredit) {
+      throw ArgumentError('Unsupported local payment method');
+    }
+    if (isCredit && customerId == null) {
+      throw ArgumentError('Customer is required for Pay Later');
+    }
+
+    final tendered = isCash ? tenderedMinor : 0;
+    if (isCash && tendered == null) {
+      throw ArgumentError('Cash tender is required');
+    }
+    final changeMinor =
+        isCash ? cashChangeDue(totals.totalMinor, tendered!) : 0;
+
     final saleId = _uuid.v4();
     final now = DateTime.now().toUtc();
     late final String invoiceNumber;
 
     await _database.transaction((txn) async {
+      if (isCredit) {
+        final customers = await txn.query(
+          'customer',
+          columns: ['id'],
+          where: 'id = ?',
+          whereArgs: [customerId],
+          limit: 1,
+        );
+        if (customers.isEmpty) {
+          throw StateError('Customer not found');
+        }
+      }
+
       final sequenceRows = await txn.query(
         'terminal_sequence',
         columns: ['next_invoice'],
@@ -854,6 +913,7 @@ class LocalPosDatabase {
         'store_id': context.storeId,
         'terminal_id': context.terminalId,
         'cashier_user_id': context.userId,
+        'customer_id': customerId,
         'invoice_number': invoiceNumber,
         'local_created_at': now.toIso8601String(),
         'subtotal_minor': totals.subtotalMinor,
@@ -896,9 +956,9 @@ class LocalPosDatabase {
       await txn.insert('payment', {
         'id': paymentId,
         'sale_id': saleId,
-        'method': 'cash',
+        'method': paymentMethod,
         'amount_minor': totals.totalMinor,
-        'tendered_minor': tenderedMinor,
+        'tendered_minor': tendered ?? 0,
         'change_minor': changeMinor,
         'status': 'captured',
         'reconciliation_status': 'not_applicable',
@@ -911,8 +971,21 @@ class LocalPosDatabase {
         'payment_status': 'captured',
         'amount_minor': totals.totalMinor,
         'occurred_at': now.toIso8601String(),
-        'metadata_json': jsonEncode({'method': 'cash'}),
+        'metadata_json': jsonEncode({'method': paymentMethod}),
       });
+
+      if (isCredit) {
+        await txn.insert('customer_credit_entry', {
+          'id': _uuid.v4(),
+          'customer_id': customerId,
+          'entry_type': 'charge',
+          'amount_minor': totals.totalMinor,
+          'sale_id': saleId,
+          'due_date': dueDate?.toIso8601String().split('T').first,
+          'occurred_at': now.toIso8601String(),
+          'idempotency_key': 'credit:$saleId',
+        });
+      }
 
       final idempotencyKey = _uuid.v4();
       await txn.insert('sync_outbox', {
@@ -926,6 +999,7 @@ class LocalPosDatabase {
         'idempotency_key': idempotencyKey,
         'payload_json': jsonEncode({
           'saleId': saleId,
+          'customerId': customerId,
           'invoiceNumber': invoiceNumber,
           'createdAt': now.toIso8601String(),
           'subtotalMinor': totals.subtotalMinor,
@@ -933,11 +1007,12 @@ class LocalPosDatabase {
           'taxMinor': totals.taxMinor,
           'totalMinor': totals.totalMinor,
           'payment': {
-            'method': 'cash',
+            'method': paymentMethod,
             'amountMinor': totals.totalMinor,
-            'tenderedMinor': tenderedMinor,
+            'tenderedMinor': tendered ?? 0,
             'changeMinor': changeMinor,
           },
+          'creditDueDate': dueDate?.toIso8601String().split('T').first,
           'lines': totals.lines
               .map(
                 (line) => {
@@ -969,15 +1044,26 @@ class LocalPosDatabase {
     }
     receipt
       ..writeln('------------------------')
-      ..writeln('Total  ${formatInr(totals.totalMinor)}')
-      ..writeln('Cash   ${formatInr(tenderedMinor)}')
-      ..writeln('Return ${formatInr(changeMinor)}');
+      ..writeln('Total  ${formatInr(totals.totalMinor)}');
+
+    if (isCash) {
+      receipt
+        ..writeln('Cash   ${formatInr(tendered!)}')
+        ..writeln('Return ${formatInr(changeMinor)}');
+    } else {
+      receipt.writeln('Customer Credit  ${formatInr(totals.totalMinor)}');
+      if (dueDate != null) {
+        receipt.writeln(
+          'Due ${dueDate.toIso8601String().split('T').first}',
+        );
+      }
+    }
 
     return OfflineSaleResult(
       saleId: saleId,
       invoiceNumber: invoiceNumber,
       totalMinor: totals.totalMinor,
-      tenderedMinor: tenderedMinor,
+      tenderedMinor: tendered ?? 0,
       changeMinor: changeMinor,
       receiptText: receipt.toString(),
     );
