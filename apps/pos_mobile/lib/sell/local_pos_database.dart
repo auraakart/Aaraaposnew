@@ -2800,7 +2800,11 @@ class LocalPosDatabase {
     final whole = milli ~/ 1000;
     final fraction = (milli % 1000).toString().padLeft(3, '0');
     if (fraction == '000') return '$whole';
-    return '$whole.${fraction.replaceFirst(RegExp(r'0+
+    final trimmed = fraction.replaceFirst(RegExp(r'0+$'), '');
+    return '$whole.$trimmed';
+  }
+
+  Future<int> pendingOutboxCount() async {
     final rows = await _database.rawQuery(
       "SELECT COUNT(*) AS count FROM sync_outbox WHERE state = 'pending'",
     );
