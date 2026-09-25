@@ -27,7 +27,10 @@ class _SellScreenState extends State<SellScreen> {
   final searchController = TextEditingController();
   final Map<String, int> quantitiesMilli = {};
   final Map<String, int> discountsMinor = {};
+  final Map<String, String> discountSources = {};
+  final Map<String, String> discountReferences = {};
   final Map<String, Product> cartProducts = {};
+  String? appliedPromotionName;
   List<Product> products = const [];
   bool loading = true;
   int pendingSync = 0;
@@ -68,6 +71,8 @@ class _SellScreenState extends State<SellScreen> {
             product: product,
             quantityMilli: entry.value,
             discountMinor: discountsMinor[entry.key] ?? 0,
+            discountSource: discountSources[entry.key],
+            discountReferenceId: discountReferences[entry.key],
           ),
         );
       }
@@ -83,8 +88,24 @@ class _SellScreenState extends State<SellScreen> {
     return priceSale(lines, widget.saleContext.taxMode);
   }
 
+  void _clearPromotionDiscountsInState() {
+    final promoted = discountSources.entries
+        .where((entry) => entry.value == 'promotion')
+        .map((entry) => entry.key)
+        .toList();
+    for (final productId in promoted) {
+      discountsMinor.remove(productId);
+      discountSources.remove(productId);
+      discountReferences.remove(productId);
+    }
+    if (promoted.isNotEmpty) {
+      appliedPromotionName = null;
+    }
+  }
+
   void add(Product product) {
     setState(() {
+      _clearPromotionDiscountsInState();
       cartProducts[product.id] = product;
       quantitiesMilli.update(
         product.id,
@@ -96,10 +117,13 @@ class _SellScreenState extends State<SellScreen> {
 
   void removeOne(Product product) {
     setState(() {
+      _clearPromotionDiscountsInState();
       final next = (quantitiesMilli[product.id] ?? 0) - 1000;
       if (next <= 0) {
         quantitiesMilli.remove(product.id);
         discountsMinor.remove(product.id);
+        discountSources.remove(product.id);
+        discountReferences.remove(product.id);
         cartProducts.remove(product.id);
       } else {
         quantitiesMilli[product.id] = next;
@@ -289,7 +313,61 @@ class _SellScreenState extends State<SellScreen> {
     );
     controller.dispose();
     if (result == null || !mounted) return;
-    setState(() => discountsMinor[product.id] = result);
+    setState(() {
+      _clearPromotionDiscountsInState();
+      if (result == 0) {
+        discountsMinor.remove(product.id);
+        discountSources.remove(product.id);
+        discountReferences.remove(product.id);
+      } else {
+        discountsMinor[product.id] = result;
+        discountSources[product.id] = 'manual';
+        discountReferences.remove(product.id);
+      }
+    });
+  }
+
+  Future<void> applyBestOffer() async {
+    if (cartLines.isEmpty) return;
+    final hasManualDiscount = discountSources.values.any(
+      (source) => source != 'promotion',
+    );
+    if (hasManualDiscount) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Remove manual discounts before applying an offer.'),
+        ),
+      );
+      return;
+    }
+
+    setState(_clearPromotionDiscountsInState);
+    final evaluation = await widget.database.bestPromotionForLines(cartLines);
+    if (!mounted) return;
+    if (evaluation == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('No active offer applies to this bill.')),
+      );
+      return;
+    }
+
+    setState(() {
+      for (final entry in evaluation.lineDiscounts.entries) {
+        if (entry.value <= 0) continue;
+        discountsMinor[entry.key] = entry.value;
+        discountSources[entry.key] = 'promotion';
+        discountReferences[entry.key] = evaluation.promotion.id;
+      }
+      appliedPromotionName = evaluation.promotion.name;
+    });
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          '${evaluation.promotion.name} applied: '
+          '${formatInr(evaluation.discountMinor)} off',
+        ),
+      ),
+    );
   }
 
   Future<void> holdCurrentSale() async {
@@ -303,6 +381,9 @@ class _SellScreenState extends State<SellScreen> {
     setState(() {
       quantitiesMilli.clear();
       discountsMinor.clear();
+      discountSources.clear();
+      discountReferences.clear();
+      appliedPromotionName = null;
       cartProducts.clear();
       selectedCustomer = null;
     });
@@ -362,11 +443,20 @@ class _SellScreenState extends State<SellScreen> {
     setState(() {
       quantitiesMilli.clear();
       discountsMinor.clear();
+      discountSources.clear();
+      discountReferences.clear();
+      appliedPromotionName = null;
       cartProducts.clear();
       for (final line in resumed.lines) {
         cartProducts[line.product.id] = line.product;
         quantitiesMilli[line.product.id] = line.quantityMilli;
         discountsMinor[line.product.id] = line.discountMinor;
+        if (line.discountSource != null) {
+          discountSources[line.product.id] = line.discountSource!;
+        }
+        if (line.discountReferenceId != null) {
+          discountReferences[line.product.id] = line.discountReferenceId!;
+        }
       }
       selectedCustomer = customer;
     });
@@ -395,9 +485,21 @@ class _SellScreenState extends State<SellScreen> {
               child: ListTile(
                 leading: const Icon(Icons.person),
                 title: Text(customer.name),
-                subtitle: customer.creditBalanceMinor > 0
-                    ? Text('${formatInr(customer.creditBalanceMinor)} due')
-                    : null,
+                subtitle: Text(
+                  [
+                    if (customer.creditBalanceMinor > 0)
+                      '${formatInr(customer.creditBalanceMinor)} due',
+                    if (customer.loyaltyPoints > 0)
+                      '${customer.loyaltyPoints} points',
+                  ].isEmpty
+                      ? 'No balance'
+                      : [
+                          if (customer.creditBalanceMinor > 0)
+                            '${formatInr(customer.creditBalanceMinor)} due',
+                          if (customer.loyaltyPoints > 0)
+                            '${customer.loyaltyPoints} points',
+                        ].join(' • '),
+                ),
                 contentPadding: EdgeInsets.zero,
               ),
             ),
@@ -449,6 +551,9 @@ class _SellScreenState extends State<SellScreen> {
     setState(() {
       quantitiesMilli.clear();
       discountsMinor.clear();
+      discountSources.clear();
+      discountReferences.clear();
+      appliedPromotionName = null;
       cartProducts.clear();
       selectedCustomer = null;
     });
@@ -702,6 +807,15 @@ class _SellScreenState extends State<SellScreen> {
                 icon: const Icon(Icons.play_circle_outline),
                 label: const Text('Resume'),
               ),
+              OutlinedButton.icon(
+                onPressed: totals == null ? null : applyBestOffer,
+                icon: const Icon(Icons.local_offer_outlined),
+                label: Text(
+                  appliedPromotionName == null
+                      ? 'Apply offer'
+                      : appliedPromotionName!,
+                ),
+              ),
             ],
           ),
         ),
@@ -801,7 +915,9 @@ class _SellScreenState extends State<SellScreen> {
                                     ),
                                   if ((discountsMinor[product.id] ?? 0) > 0)
                                     Text(
-                                      'Discount ${formatInr(discountsMinor[product.id]!)}',
+                                      discountSources[product.id] == 'promotion'
+                                          ? 'Offer: ${formatInr(discountsMinor[product.id]!)} off'
+                                          : 'Discount ${formatInr(discountsMinor[product.id]!)}',
                                       style: Theme.of(context)
                                           .textTheme
                                           .labelMedium,
