@@ -30,6 +30,7 @@ void main() {
     expect(find.text('Cash'), findsOneWidget);
     expect(find.text('UPI'), findsOneWidget);
     expect(find.text('Card'), findsOneWidget);
+    expect(find.text('Customer Credit / Pay Later'), findsOneWidget);
     expect(find.text('Split payment'), findsOneWidget);
     expect(
       find.text('Connect a payment provider to enable UPI.'),
@@ -39,6 +40,39 @@ void main() {
       find.text('Connect a payment provider to enable cards.'),
       findsOneWidget,
     );
+  });
+
+  testWidgets('Pay Later returns when a customer enables it', (tester) async {
+    PaymentChoice? choice;
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Builder(
+          builder: (context) => Scaffold(
+            body: FilledButton(
+              onPressed: () async {
+                choice = await showPaymentMethodSheet(
+                  context,
+                  availableMethods: const {
+                    PaymentMethod.cash,
+                    PaymentMethod.customerCredit,
+                  },
+                  splitEnabled: false,
+                );
+              },
+              child: const Text('Pay'),
+            ),
+          ),
+        ),
+      ),
+    );
+
+    await tester.tap(find.text('Pay'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Customer Credit / Pay Later'));
+    await tester.pumpAndSettle();
+
+    expect(choice, PaymentChoice.customerCredit);
   });
 
   testWidgets('cash choice returns only when enabled', (tester) async {
