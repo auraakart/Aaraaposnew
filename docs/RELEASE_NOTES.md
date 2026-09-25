@@ -1,5 +1,11 @@
 # Release Notes
 
+## V2.7 Hardware & Device Foundation — validation
+
+Added terminal-scoped hardware/device capability contracts, server device/profile command-audit schema, provenance rules for drawer/receipt actions, Flutter adapter contracts for drawer/scale/display/payment terminal, truthful readiness UI, and regression tests.
+
+Camera scanning remains app-integrated. Printer/drawer/scale/display/payment-terminal physical integrations and certification remain external.
+
 ## V2.6 Commerce / WhatsApp-Ready Foundation — validation
 
 Added provider-neutral commerce orders with channel provenance, manual WhatsApp/phone capture, Received → Confirmed → Ready → Completed lifecycle, explicit RBAC, consent-aware WhatsApp messaging rules, inbound-event persistence, offline order queue, and conversion into the existing Sell/payment pipeline.
@@ -106,6 +112,7 @@ Not claimed:
 - tax filing gateways or regulatory certification
 - physical hardware certification
 - production credentials, hosting or deployment
+
 
 
 
