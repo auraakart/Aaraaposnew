@@ -1,5 +1,11 @@
 # Release Notes
 
+## V1.5 Store Operations — validation
+
+Added employee roster/roles, shift opening/closing, drawer deposits/withdrawals, expenses, sale-to-shift association, deterministic cash reconciliation, variance recording and approval-request foundation.
+
+Production credential issuance, payroll, attendance, bank feeds and server approval execution remain explicit external/future boundaries.
+
 ## V1.4 Purchases & Suppliers — validation
 
 Added suppliers, purchase orders, receive-to-stock workflow, purchase returns, supplier payable/credit ledger, bounded supplier payments, Purchases UI, tenant-safe server schema and regression tests.
@@ -50,6 +56,7 @@ Not claimed:
 - tax filing gateways or regulatory certification
 - physical hardware certification
 - production credentials, hosting or deployment
+
 
 
 
