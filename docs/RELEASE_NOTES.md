@@ -1,5 +1,11 @@
 # Release Notes
 
+## V2.2 Multi-store Foundation — validation
+
+Added explicit store access permissions, source/destination authorization, database store-scope consistency, inter-store transfer lifecycle/events, multi-store aggregation domain and a Store & Terminal scope screen.
+
+Offline POS terminals remain deliberately store-bound; production authenticated cross-store synchronization is not simulated.
+
 ## V2.1 Core Transaction Closure — validation
 
 Added partial returns/refunds with immutable original-sale linkage, Pay Later credit/cash split refunds, stock restoration, shift-aware cash refunds, hold/resume, line discounts with authorization rules, camera barcode scan UI, receipt copy/share adapters, refund reporting and refund anomaly intelligence.
@@ -76,6 +82,7 @@ Not claimed:
 - tax filing gateways or regulatory certification
 - physical hardware certification
 - production credentials, hosting or deployment
+
 
 
 
