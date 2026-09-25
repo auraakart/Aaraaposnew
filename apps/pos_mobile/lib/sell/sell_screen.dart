@@ -782,6 +782,8 @@ class _SellScreenState extends State<SellScreen> {
           ),
         ),
       );
+    } else if (commerceOrderId != null && mounted) {
+      Navigator.of(context).pop();
     }
   }
 
