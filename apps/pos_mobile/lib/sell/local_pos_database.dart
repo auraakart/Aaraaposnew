@@ -3986,19 +3986,23 @@ class LocalPosDatabase {
         limit: 1,
       );
       if (loyaltyRows.isNotEmpty) {
-        final pointsEarned = loyaltyRows.single['points_earned']! as int;
-        final customerId = loyaltyRows.single['customer_id']! as String;
+        final loyalty = loyaltyRows.single;
+        final pointsEarned = loyalty['points_earned']! as int;
+        final pointsRedeemed = loyalty['points_redeemed']! as int;
+        final customerId = loyalty['customer_id']! as String;
+
+        final refundRows = await txn.rawQuery(
+          '''
+          SELECT COALESCE(SUM(total_refund_minor), 0) AS total
+          FROM sale_return
+          WHERE sale_id = ? AND status = 'finalized'
+          ''',
+          [saleId],
+        );
+        final cumulativeRefund = refundRows.single['total']! as int;
+        final saleTotal = sale['total_minor']! as int;
+
         if (pointsEarned > 0) {
-          final refundRows = await txn.rawQuery(
-            '''
-            SELECT COALESCE(SUM(total_refund_minor), 0) AS total
-            FROM sale_return
-            WHERE sale_id = ? AND status = 'finalized'
-            ''',
-            [saleId],
-          );
-          final cumulativeRefund = refundRows.single['total']! as int;
-          final saleTotal = sale['total_minor']! as int;
           final targetReversal = saleTotal <= 0
               ? pointsEarned
               : (pointsEarned * cumulativeRefund + saleTotal ~/ 2) ~/
@@ -4020,9 +4024,39 @@ class LocalPosDatabase {
               'entry_type': 'adjustment_out',
               'points': pointsToReverse,
               'sale_id': saleId,
-              'note': 'Points reversed on $returnNumber',
+              'note': 'Earned points reversed on $returnNumber',
               'occurred_at': now.toIso8601String(),
-              'idempotency_key': 'loyalty-return:$returnId',
+              'idempotency_key': 'loyalty-earn-return:$returnId',
+            });
+          }
+        }
+
+        if (pointsRedeemed > 0) {
+          final targetRestore = saleTotal <= 0
+              ? pointsRedeemed
+              : (pointsRedeemed * cumulativeRefund + saleTotal ~/ 2) ~/
+                  saleTotal;
+          final restoredRows = await txn.rawQuery(
+            '''
+            SELECT COALESCE(SUM(points), 0) AS points
+            FROM customer_loyalty_entry
+            WHERE sale_id = ? AND entry_type = 'adjustment_in'
+              AND note LIKE 'Redeemed points restored%'
+            ''',
+            [saleId],
+          );
+          final alreadyRestored = restoredRows.single['points']! as int;
+          final pointsToRestore = targetRestore - alreadyRestored;
+          if (pointsToRestore > 0) {
+            await txn.insert('customer_loyalty_entry', {
+              'id': _uuid.v4(),
+              'customer_id': customerId,
+              'entry_type': 'adjustment_in',
+              'points': pointsToRestore,
+              'sale_id': saleId,
+              'note': 'Redeemed points restored on $returnNumber',
+              'occurred_at': now.toIso8601String(),
+              'idempotency_key': 'loyalty-redeem-return:$returnId',
             });
           }
         }
@@ -4310,6 +4344,8 @@ class LocalPosDatabase {
     final now = DateTime.now().toUtc();
     late final String invoiceNumber;
     var loyaltyPointsEarned = 0;
+    var loyaltyPointsRedeemed = 0;
+    var loyaltyRedeemedMinor = 0;
 
     await _database.transaction((txn) async {
       if (isCredit) {
@@ -4454,7 +4490,23 @@ class LocalPosDatabase {
         });
       }
 
-      if (customerId != null && !isCredit) {
+      final loyaltyDiscountLines = totals.lines.where(
+        (line) => line.discountSource == 'loyalty' && line.discountMinor > 0,
+      );
+      for (final line in loyaltyDiscountLines) {
+        loyaltyRedeemedMinor += line.discountMinor;
+        if (line.discountReferenceId != customerId) {
+          throw StateError('Loyalty discount customer does not match sale');
+        }
+        if (line.product.taxPriceMode != TaxPriceMode.inclusive) {
+          throw StateError(
+            'Loyalty redemption currently requires tax-inclusive products',
+          );
+        }
+      }
+
+      LoyaltyProgram? activeProgram;
+      if (customerId != null) {
         final programRows = await txn.query(
           'loyalty_program',
           where: 'singleton_id = 1',
@@ -4462,7 +4514,7 @@ class LocalPosDatabase {
         );
         if (programRows.isNotEmpty) {
           final programRow = programRows.single;
-          final program = LoyaltyProgram(
+          activeProgram = LoyaltyProgram(
             enabled: (programRow['enabled']! as int) == 1,
             pointsPer100Rupees:
                 programRow['points_per_100_rupees']! as int,
@@ -4471,28 +4523,89 @@ class LocalPosDatabase {
             maxRedemptionBps:
                 programRow['max_redemption_bps']! as int,
           );
-          loyaltyPointsEarned =
-              earnedLoyaltyPoints(totals.totalMinor, program);
-          if (loyaltyPointsEarned > 0) {
-            await txn.insert('customer_loyalty_entry', {
-              'id': _uuid.v4(),
-              'customer_id': customerId,
-              'entry_type': 'earn',
-              'points': loyaltyPointsEarned,
-              'sale_id': saleId,
-              'note': 'Points earned on $invoiceNumber',
-              'occurred_at': now.toIso8601String(),
-              'idempotency_key': 'loyalty-earn:$saleId',
-            });
-            await txn.insert('sale_loyalty', {
-              'sale_id': saleId,
-              'customer_id': customerId,
-              'points_earned': loyaltyPointsEarned,
-              'points_redeemed': 0,
-              'redeemed_minor': 0,
-            });
-          }
         }
+      }
+
+      if (loyaltyRedeemedMinor > 0) {
+        if (customerId == null || isCredit || activeProgram == null) {
+          throw StateError('Loyalty redemption requires a cash customer sale');
+        }
+        validateLoyaltyProgram(activeProgram!);
+        if (!activeProgram!.enabled) {
+          throw StateError('Loyalty program is not enabled');
+        }
+        if (loyaltyRedeemedMinor % activeProgram!.redemptionMinorPerPoint != 0) {
+          throw StateError('Loyalty discount does not match point value');
+        }
+        loyaltyPointsRedeemed =
+            loyaltyRedeemedMinor ~/ activeProgram!.redemptionMinorPerPoint;
+
+        final balanceRows = await txn.rawQuery(
+          '''
+          SELECT COALESCE(
+            SUM(
+              CASE
+                WHEN entry_type IN ('earn', 'adjustment_in') THEN points
+                ELSE -points
+              END
+            ),
+            0
+          ) AS points
+          FROM customer_loyalty_entry
+          WHERE customer_id = ?
+          ''',
+          [customerId],
+        );
+        final balance = balanceRows.single['points']! as int;
+        final allowed = maxLoyaltyRedemption(
+          saleMinor: totals.totalMinor + loyaltyRedeemedMinor,
+          availablePoints: balance,
+          requestedPoints: loyaltyPointsRedeemed,
+          program: activeProgram!,
+        );
+        if (allowed.points != loyaltyPointsRedeemed ||
+            allowed.amountMinor != loyaltyRedeemedMinor) {
+          throw StateError('Loyalty redemption exceeds available reward');
+        }
+
+        await txn.insert('customer_loyalty_entry', {
+          'id': _uuid.v4(),
+          'customer_id': customerId,
+          'entry_type': 'redeem',
+          'points': loyaltyPointsRedeemed,
+          'sale_id': saleId,
+          'note': 'Points redeemed on $invoiceNumber',
+          'occurred_at': now.toIso8601String(),
+          'idempotency_key': 'loyalty-redeem:$saleId',
+        });
+      }
+
+      if (customerId != null && !isCredit && activeProgram != null) {
+        loyaltyPointsEarned =
+            earnedLoyaltyPoints(totals.totalMinor, activeProgram!);
+        if (loyaltyPointsEarned > 0) {
+          await txn.insert('customer_loyalty_entry', {
+            'id': _uuid.v4(),
+            'customer_id': customerId,
+            'entry_type': 'earn',
+            'points': loyaltyPointsEarned,
+            'sale_id': saleId,
+            'note': 'Points earned on $invoiceNumber',
+            'occurred_at': now.toIso8601String(),
+            'idempotency_key': 'loyalty-earn:$saleId',
+          });
+        }
+      }
+
+      if (customerId != null &&
+          (loyaltyPointsEarned > 0 || loyaltyPointsRedeemed > 0)) {
+        await txn.insert('sale_loyalty', {
+          'sale_id': saleId,
+          'customer_id': customerId,
+          'points_earned': loyaltyPointsEarned,
+          'points_redeemed': loyaltyPointsRedeemed,
+          'redeemed_minor': loyaltyRedeemedMinor,
+        });
       }
 
       final promotionDiscounts = <String, int>{};
@@ -4536,6 +4649,9 @@ class LocalPosDatabase {
           'createdAt': now.toIso8601String(),
           'subtotalMinor': totals.subtotalMinor,
           'discountMinor': totals.discountMinor,
+          'loyaltyPointsRedeemed': loyaltyPointsRedeemed,
+          'loyaltyRedeemedMinor': loyaltyRedeemedMinor,
+          'loyaltyPointsEarned': loyaltyPointsEarned,
           'taxMinor': totals.taxMinor,
           'totalMinor': totals.totalMinor,
           'payment': {
@@ -4581,8 +4697,14 @@ class LocalPosDatabase {
       ..writeln('------------------------')
       ..writeln('Total  ${formatInr(totals.totalMinor)}');
 
+    if (loyaltyPointsRedeemed > 0) {
+      receipt.writeln(
+        'Loyalty -$loyaltyPointsRedeemed points '
+        '(${formatInr(loyaltyRedeemedMinor)} off)',
+      );
+    }
     if (loyaltyPointsEarned > 0) {
-      receipt.writeln('Loyalty +$loyaltyPointsEarned points');
+      receipt.writeln('Loyalty +$loyaltyPointsEarned points earned');
     }
 
     if (isCash) {
