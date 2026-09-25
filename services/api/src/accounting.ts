@@ -38,11 +38,19 @@ export interface AccountingExportManifest {
   expensesMinor: number;
   customerCreditMinor: number;
   supplierLedgerMinor: number;
-  taxableMinor: number;
-  cgstMinor: number;
-  sgstMinor: number;
-  igstMinor: number;
-  unclassifiedTaxMinor: number;
+  salesTaxableMinor: number;
+  salesCgstMinor: number;
+  salesSgstMinor: number;
+  salesIgstMinor: number;
+  returnsTaxableMinor: number;
+  returnsCgstMinor: number;
+  returnsSgstMinor: number;
+  returnsIgstMinor: number;
+  purchaseTaxableMinor: number;
+  purchaseCgstMinor: number;
+  purchaseSgstMinor: number;
+  purchaseIgstMinor: number;
+  purchaseUnclassifiedTaxMinor: number;
 }
 
 function assertNonNegativeSafeInteger(value: number, field: string): void {
@@ -105,30 +113,46 @@ export function buildAccountingManifest(
     expensesMinor: 0,
     customerCreditMinor: 0,
     supplierLedgerMinor: 0,
-    taxableMinor: 0,
-    cgstMinor: 0,
-    sgstMinor: 0,
-    igstMinor: 0,
-    unclassifiedTaxMinor: 0
+    salesTaxableMinor: 0,
+    salesCgstMinor: 0,
+    salesSgstMinor: 0,
+    salesIgstMinor: 0,
+    returnsTaxableMinor: 0,
+    returnsCgstMinor: 0,
+    returnsSgstMinor: 0,
+    returnsIgstMinor: 0,
+    purchaseTaxableMinor: 0,
+    purchaseCgstMinor: 0,
+    purchaseSgstMinor: 0,
+    purchaseIgstMinor: 0,
+    purchaseUnclassifiedTaxMinor: 0
   };
 
   for (const row of rows) {
     validateAccountingExportRow(row);
-    manifest.taxableMinor += row.tax.taxableMinor;
-    manifest.cgstMinor += row.tax.cgstMinor;
-    manifest.sgstMinor += row.tax.sgstMinor;
-    manifest.igstMinor += row.tax.igstMinor;
-    manifest.unclassifiedTaxMinor += row.tax.unclassifiedTaxMinor;
 
     switch (row.kind) {
       case "sales":
         manifest.salesMinor += row.totalMinor;
+        manifest.salesTaxableMinor += row.tax.taxableMinor;
+        manifest.salesCgstMinor += row.tax.cgstMinor;
+        manifest.salesSgstMinor += row.tax.sgstMinor;
+        manifest.salesIgstMinor += row.tax.igstMinor;
         break;
       case "returns":
         manifest.returnsMinor += row.totalMinor;
+        manifest.returnsTaxableMinor += row.tax.taxableMinor;
+        manifest.returnsCgstMinor += row.tax.cgstMinor;
+        manifest.returnsSgstMinor += row.tax.sgstMinor;
+        manifest.returnsIgstMinor += row.tax.igstMinor;
         break;
       case "purchases":
         manifest.purchasesMinor += row.totalMinor;
+        manifest.purchaseTaxableMinor += row.tax.taxableMinor;
+        manifest.purchaseCgstMinor += row.tax.cgstMinor;
+        manifest.purchaseSgstMinor += row.tax.sgstMinor;
+        manifest.purchaseIgstMinor += row.tax.igstMinor;
+        manifest.purchaseUnclassifiedTaxMinor += row.tax.unclassifiedTaxMinor;
         break;
       case "expenses":
         manifest.expensesMinor += row.totalMinor;
