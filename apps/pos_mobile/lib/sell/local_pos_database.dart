@@ -2217,6 +2217,17 @@ class LocalPosDatabase {
       [start, end],
     );
     final expensesMinor = expenseRows.single['expense_minor']! as int;
+    final refundRows = await _database.rawQuery(
+      '''
+      SELECT COALESCE(SUM(total_refund_minor), 0) AS refund_minor
+      FROM sale_return
+      WHERE status = 'finalized'
+        AND returned_at >= ?
+        AND returned_at < ?
+      ''',
+      [start, end],
+    );
+    final refundsMinor = refundRows.single['refund_minor']! as int;
 
     final costRows = await _database.rawQuery(
       '''
@@ -2260,7 +2271,7 @@ class LocalPosDatabase {
         ? 10000
         : (coveredTaxableMinor * 10000) ~/ taxableSalesMinor;
     final estimatedProfitMinor =
-        coveredTaxableMinor == taxableSalesMinor
+        coveredTaxableMinor == taxableSalesMinor && refundsMinor == 0
             ? taxableSalesMinor - estimatedCostMinor - expensesMinor
             : null;
 
@@ -2297,6 +2308,7 @@ class LocalPosDatabase {
       moneyReceivedMinor: moneyReceivedMinor,
       moneyDueMinor: moneyDueMinor < 0 ? 0 : moneyDueMinor,
       expensesMinor: expensesMinor,
+      refundsMinor: refundsMinor,
       estimatedProfitMinor: estimatedProfitMinor,
       lowStockCount: lowStockCount,
       costCoverageBps: costCoverageBps,
@@ -2330,6 +2342,27 @@ class LocalPosDatabase {
           title: 'Sale ${row['invoice_number']}',
           type: 'sale',
           amountMinor: row['total_minor']! as int,
+        ),
+      );
+    }
+
+    final returns = await _database.rawQuery(
+      '''
+      SELECT return_number, total_refund_minor, returned_at
+      FROM sale_return
+      WHERE status = 'finalized'
+      ORDER BY returned_at DESC
+      LIMIT ?
+      ''',
+      [limit],
+    );
+    for (final row in returns) {
+      items.add(
+        BusinessTimelineItem(
+          occurredAt: DateTime.parse(row['returned_at']! as String),
+          title: 'Return ${row['return_number']}',
+          type: 'sale_return',
+          amountMinor: -(row['total_refund_minor']! as int),
         ),
       );
     }
@@ -2571,6 +2604,25 @@ class LocalPosDatabase {
       );
     }
 
+    if (normalized.contains('refund') || normalized.contains('return')) {
+      final metrics = await businessMetrics(ReportPeriod.today);
+      return AssistantAnswer(
+        question: question,
+        classification: InsightClassification.fact,
+        answer: metrics.refundsMinor == 0
+            ? 'No refunds have been recorded today.'
+            : 'Refunds recorded today total ${formatInr(metrics.refundsMinor)}.',
+        evidence: [
+          InsightEvidence(
+            sourceType: 'sale_return',
+            metric: 'refunds_minor',
+            value: metrics.refundsMinor,
+            window: 'today',
+          ),
+        ],
+      );
+    }
+
     if (normalized.contains('low stock') ||
         normalized.contains('running out') ||
         normalized.contains('stock')) {
@@ -2678,7 +2730,79 @@ class LocalPosDatabase {
         normalized.contains('difference') ||
         normalized.contains('variance')) {
       final metrics = await businessMetrics(ReportPeriod.today);
-      final variance = metrics.latestCashVarianceMinor;
+      final localGeneratedAt = generatedAt.toLocal();
+    final todayStart = DateTime(
+      localGeneratedAt.year,
+      localGeneratedAt.month,
+      localGeneratedAt.day,
+    ).toUtc();
+    final tomorrow = todayStart.add(const Duration(days: 1));
+    final priorStart = todayStart.subtract(const Duration(days: 7));
+    final refundTodayRows = await _database.rawQuery(
+      '''
+      SELECT COUNT(*) AS count, COALESCE(SUM(total_refund_minor), 0) AS amount
+      FROM sale_return
+      WHERE status = 'finalized'
+        AND returned_at >= ?
+        AND returned_at < ?
+      ''',
+      [todayStart.toIso8601String(), tomorrow.toIso8601String()],
+    );
+    final refundPriorRows = await _database.rawQuery(
+      '''
+      SELECT COUNT(*) AS count
+      FROM sale_return
+      WHERE status = 'finalized'
+        AND returned_at >= ?
+        AND returned_at < ?
+      ''',
+      [priorStart.toIso8601String(), todayStart.toIso8601String()],
+    );
+    final refundCount = refundTodayRows.single['count']! as int;
+    final refundAmount = refundTodayRows.single['amount']! as int;
+    final priorRefundCount = refundPriorRows.single['count']! as int;
+    final refundRateBps = metrics.salesMinor <= 0
+        ? 0
+        : refundAmount * 10000 ~/ metrics.salesMinor;
+    final unusualCount = refundCount >= 3 &&
+        (priorRefundCount == 0 || refundCount * 7 >= priorRefundCount * 2);
+    final unusualAmount = refundAmount >= 50000 && refundRateBps >= 1000;
+    if (unusualCount || unusualAmount) {
+      insights.add(
+        LocalBusinessInsight(
+          id: 'refund-anomaly-${generatedAt.toIso8601String()}',
+          type: 'refund_anomaly',
+          classification: InsightClassification.calculation,
+          title: 'Refund activity needs attention',
+          message:
+              '$refundCount refund${refundCount == 1 ? '' : 's'} totaling '
+              '${formatInr(refundAmount)} were recorded today.',
+          evidence: [
+            InsightEvidence(
+              sourceType: 'sale_return',
+              metric: 'today_refund_count',
+              value: refundCount,
+              window: 'today',
+            ),
+            InsightEvidence(
+              sourceType: 'sale_return',
+              metric: 'today_refund_minor',
+              value: refundAmount,
+              window: 'today',
+            ),
+            InsightEvidence(
+              sourceType: 'sale_return',
+              metric: 'prior_7_day_refund_count',
+              value: priorRefundCount,
+              window: 'prior_7_days',
+            ),
+          ],
+          generatedAt: generatedAt,
+        ),
+      );
+    }
+
+    final variance = metrics.latestCashVarianceMinor;
       return AssistantAnswer(
         question: question,
         classification: InsightClassification.fact,
@@ -2752,7 +2876,8 @@ class LocalPosDatabase {
         title: 'Business today',
         message:
             'Sales ${formatInr(metrics.salesMinor)} from ${metrics.billCount} bills; '
-            'expenses ${formatInr(metrics.expensesMinor)}.',
+            'expenses ${formatInr(metrics.expensesMinor)}; '
+            'refunds ${formatInr(metrics.refundsMinor)}.',
         evidence: [
           InsightEvidence(
             sourceType: 'sale',
