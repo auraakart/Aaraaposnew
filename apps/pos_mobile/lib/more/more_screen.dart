@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../operations/operations_screen.dart';
 import '../purchases/purchases_screen.dart';
+import '../returns/returns_screen.dart';
 import '../sell/local_pos_database.dart';
 
 class MoreScreen extends StatelessWidget {
@@ -19,6 +20,29 @@ class MoreScreen extends StatelessWidget {
     return ListView(
       padding: const EdgeInsets.all(16),
       children: [
+        Card(
+          child: ListTile(
+            leading: const Icon(Icons.assignment_return_outlined),
+            title: const Text('Returns & Refunds'),
+            subtitle: const Text(
+              'Find a bill, return items and record the refund',
+            ),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () {
+              Navigator.of(context).push(
+                MaterialPageRoute<void>(
+                  builder: (_) => Scaffold(
+                    appBar: AppBar(title: const Text('Returns & Refunds')),
+                    body: ReturnsScreen(
+                      database: database,
+                      saleContext: saleContext,
+                    ),
+                  ),
+                ),
+              );
+            },
+          ),
+        ),
         Card(
           child: ListTile(
             leading: const Icon(Icons.storefront_outlined),
