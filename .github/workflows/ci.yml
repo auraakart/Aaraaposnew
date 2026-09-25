@@ -17,10 +17,11 @@ jobs:
       run:
         working-directory: services/api
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
+          package-manager-cache: false
       - run: npm install --no-audit --no-fund
       - run: npm run typecheck
       - run: npm test
@@ -32,7 +33,7 @@ jobs:
       run:
         working-directory: apps/pos_mobile
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: subosito/flutter-action@v2
         with:
           channel: stable
@@ -45,6 +46,6 @@ jobs:
     name: Foundation baseline gate
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - run: test -f docs/V0_BASELINE.md
       - run: test -f services/api/db/migrations/0001_foundation.sql
