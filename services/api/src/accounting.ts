@@ -21,6 +21,7 @@ export interface AccountingExportRow {
   occurredAt: string;
   partyName?: string;
   description: string;
+  balanceEffect: "increase" | "decrease";
   grossMinor: number;
   discountMinor: number;
   tax: AccountingTaxBreakdown;
@@ -164,6 +165,7 @@ export function accountingRowsToCsv(
     "Occurred At",
     "Party",
     "Description",
+    "Balance Effect",
     "Gross Minor",
     "Discount Minor",
     "Taxable Minor",
@@ -188,6 +190,7 @@ export function accountingRowsToCsv(
         row.occurredAt,
         row.partyName,
         row.description,
+        row.balanceEffect,
         row.grossMinor,
         row.discountMinor,
         row.tax.taxableMinor,
