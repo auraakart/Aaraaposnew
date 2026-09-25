@@ -4,6 +4,7 @@ import 'package:path/path.dart' as p;
 import 'package:sqflite/sqflite.dart';
 import 'package:uuid/uuid.dart';
 
+import '../ai/ai_domain.dart';
 import '../customers/customer_domain.dart';
 import '../intelligence/owner_intelligence.dart';
 import '../inventory/inventory_domain.dart';
@@ -2378,6 +2379,855 @@ class LocalPosDatabase {
     }
 
     return issues;
+  }
+
+  Future<AssistantAnswer> assistantAnswer(String question) async {
+    final normalized = question.trim().toLowerCase();
+    if (normalized.isEmpty) {
+      return const AssistantAnswer(
+        question: '',
+        classification: InsightClassification.fact,
+        answer: 'Ask about sales, low stock, customer credit, expenses, or cash.',
+        evidence: [
+          InsightEvidence(sourceType: 'assistant_capability', value: 'local')
+        ],
+      );
+    }
+
+    if (normalized.contains('sale')) {
+      final metrics = await businessMetrics(ReportPeriod.today);
+      return AssistantAnswer(
+        question: question,
+        classification: InsightClassification.fact,
+        answer:
+            'Today\'s sales are ${formatInr(metrics.salesMinor)} from ${metrics.billCount} bill${metrics.billCount == 1 ? '' : 's'}.',
+        evidence: [
+          InsightEvidence(
+            sourceType: 'sale',
+            metric: 'today_sales_minor',
+            value: metrics.salesMinor,
+            window: 'today',
+          ),
+          InsightEvidence(
+            sourceType: 'sale',
+            metric: 'bill_count',
+            value: metrics.billCount,
+            window: 'today',
+          ),
+        ],
+      );
+    }
+
+    if (normalized.contains('low stock') ||
+        normalized.contains('running out') ||
+        normalized.contains('stock')) {
+      final inventory = await listInventory();
+      final needsAttention = inventory
+          .where((item) => item.health != StockHealth.healthy)
+          .toList();
+      final names = needsAttention.take(5).map((item) => item.name).join(', ');
+      return AssistantAnswer(
+        question: question,
+        classification: InsightClassification.fact,
+        answer: needsAttention.isEmpty
+            ? 'No stock item currently needs attention.'
+            : '${needsAttention.length} item${needsAttention.length == 1 ? '' : 's'} need attention: $names.',
+        evidence: [
+          for (final item in needsAttention.take(10))
+            InsightEvidence(
+              sourceType: 'stock_movement',
+              sourceId: item.productId,
+              metric: 'on_hand_milli',
+              value: item.onHandMilli,
+            ),
+        ],
+      );
+    }
+
+    if (normalized.contains('owe') ||
+        normalized.contains('credit') ||
+        normalized.contains('due')) {
+      final customers = await listCustomers();
+      LocalCustomer? matched;
+      for (final customer in customers) {
+        if (normalized.contains(customer.name.toLowerCase())) {
+          matched = customer;
+          break;
+        }
+      }
+      if (matched != null) {
+        return AssistantAnswer(
+          question: question,
+          classification: InsightClassification.fact,
+          answer:
+              '${matched.name} owes ${formatInr(matched.creditBalanceMinor)}. '
+              '${matched.overdueMinor > 0 ? '${formatInr(matched.overdueMinor)} is overdue.' : 'Nothing is overdue.'}',
+          evidence: [
+            InsightEvidence(
+              sourceType: 'customer_credit_entry',
+              sourceId: matched.id,
+              metric: 'balance_minor',
+              value: matched.creditBalanceMinor,
+            ),
+            InsightEvidence(
+              sourceType: 'customer_credit_entry',
+              sourceId: matched.id,
+              metric: 'overdue_minor',
+              value: matched.overdueMinor,
+            ),
+          ],
+        );
+      }
+
+      final metrics = await businessMetrics(ReportPeriod.today);
+      return AssistantAnswer(
+        question: question,
+        classification: InsightClassification.fact,
+        answer:
+            'Customers currently owe ${formatInr(metrics.moneyDueMinor)} in total.',
+        evidence: [
+          InsightEvidence(
+            sourceType: 'customer_credit_entry',
+            metric: 'total_due_minor',
+            value: metrics.moneyDueMinor,
+          ),
+        ],
+      );
+    }
+
+    if (normalized.contains('expense')) {
+      final metrics = await businessMetrics(ReportPeriod.today);
+      return AssistantAnswer(
+        question: question,
+        classification: InsightClassification.fact,
+        answer:
+            'Today\'s recorded expenses are ${formatInr(metrics.expensesMinor)}.',
+        evidence: [
+          InsightEvidence(
+            sourceType: 'expense',
+            metric: 'today_expense_minor',
+            value: metrics.expensesMinor,
+            window: 'today',
+          ),
+        ],
+      );
+    }
+
+    if (normalized.contains('cash') ||
+        normalized.contains('difference') ||
+        normalized.contains('variance')) {
+      final metrics = await businessMetrics(ReportPeriod.today);
+      final variance = metrics.latestCashVarianceMinor;
+      return AssistantAnswer(
+        question: question,
+        classification: InsightClassification.fact,
+        answer: variance == null
+            ? 'No closed-shift cash difference is recorded yet.'
+            : variance == 0
+                ? 'The latest closed shift matched expected cash.'
+                : 'The latest closed shift has a ${formatInr(variance.abs())} '
+                    '${variance < 0 ? 'shortage' : 'excess'}.',
+        evidence: [
+          InsightEvidence(
+            sourceType: 'shift',
+            metric: 'latest_variance_minor',
+            value: variance ?? 0,
+          ),
+        ],
+      );
+    }
+
+    if (normalized.contains('order') ||
+        normalized.contains('buy') ||
+        normalized.contains('purchase')) {
+      final insights = await generateBusinessInsights();
+      final suggestions = insights
+          .where((item) => item.type == 'purchase_suggestion')
+          .toList();
+      return AssistantAnswer(
+        question: question,
+        classification: InsightClassification.recommendation,
+        answer: suggestions.isEmpty
+            ? 'Recent sales do not currently support a purchase suggestion.'
+            : suggestions.take(3).map((item) => item.message).join(' '),
+        evidence: suggestions.isEmpty
+            ? const [
+                InsightEvidence(
+                  sourceType: 'sale_line',
+                  metric: 'purchase_suggestions',
+                  value: 0,
+                  window: 'last_14_days',
+                ),
+              ]
+            : [
+                for (final item in suggestions.take(3)) ...item.evidence,
+              ],
+      );
+    }
+
+    return const AssistantAnswer(
+      question: '',
+      classification: InsightClassification.fact,
+      answer:
+          'I can answer recorded questions about sales, stock, customer credit, expenses, cash differences and purchase suggestions.',
+      evidence: [
+        InsightEvidence(sourceType: 'assistant_capability', value: 'local')
+      ],
+    );
+  }
+
+  Future<List<LocalBusinessInsight>> generateBusinessInsights({
+    DateTime? now,
+  }) async {
+    final generatedAt = (now ?? DateTime.now()).toUtc();
+    final insights = <LocalBusinessInsight>[];
+    final metrics = await businessMetrics(ReportPeriod.today, now: now);
+
+    insights.add(
+      LocalBusinessInsight(
+        id: 'daily-summary-${generatedAt.toIso8601String()}',
+        type: 'daily_summary',
+        classification: InsightClassification.fact,
+        title: 'Business today',
+        message:
+            'Sales ${formatInr(metrics.salesMinor)} from ${metrics.billCount} bills; '
+            'expenses ${formatInr(metrics.expensesMinor)}.',
+        evidence: [
+          InsightEvidence(
+            sourceType: 'sale',
+            metric: 'sales_minor',
+            value: metrics.salesMinor,
+            window: 'today',
+          ),
+          InsightEvidence(
+            sourceType: 'expense',
+            metric: 'expenses_minor',
+            value: metrics.expensesMinor,
+            window: 'today',
+          ),
+        ],
+        generatedAt: generatedAt,
+      ),
+    );
+
+    if (metrics.previousComparableSalesMinor > 0) {
+      final delta = metrics.salesMinor - metrics.previousComparableSalesMinor;
+      final direction = delta.abs() * 10000 ~/
+          metrics.previousComparableSalesMinor;
+      if (direction >= 500) {
+        insights.add(
+          LocalBusinessInsight(
+            id: 'sales-comparison-${generatedAt.toIso8601String()}',
+            type: 'sales_comparison',
+            classification: InsightClassification.calculation,
+            title: delta < 0 ? 'Sales are lower' : 'Sales are higher',
+            message:
+                'Sales are ${formatInr(delta.abs())} ${delta < 0 ? 'lower' : 'higher'} '
+                'than the same period one week earlier.',
+            evidence: [
+              InsightEvidence(
+                sourceType: 'sale',
+                metric: 'current_sales_minor',
+                value: metrics.salesMinor,
+                window: 'today',
+              ),
+              InsightEvidence(
+                sourceType: 'sale',
+                metric: 'comparison_sales_minor',
+                value: metrics.previousComparableSalesMinor,
+                window: 'same_period_last_week',
+              ),
+            ],
+            generatedAt: generatedAt,
+          ),
+        );
+      }
+    }
+
+    final start = generatedAt.subtract(const Duration(days: 14)).toIso8601String();
+    final recommendationRows = await _database.rawQuery(
+      '''
+      SELECT
+        p.id,
+        p.name,
+        COALESCE((
+          SELECT SUM(sm.quantity_delta_milli)
+          FROM stock_movement sm
+          WHERE sm.product_id = p.id
+        ), 0) AS on_hand_milli,
+        COALESCE((
+          SELECT SUM(sl.quantity_milli)
+          FROM sale_line sl
+          INNER JOIN sale s ON s.id = sl.sale_id
+          WHERE sl.product_id = p.id
+            AND s.status = 'finalized'
+            AND s.local_created_at >= ?
+        ), 0) AS sold_milli
+      FROM product p
+      WHERE p.active = 1
+      ORDER BY p.name COLLATE NOCASE
+      ''',
+      [start],
+    );
+
+    for (final row in recommendationRows) {
+      final soldMilli = row['sold_milli']! as int;
+      if (soldMilli <= 0) continue;
+      final averageDailySoldMilli = (soldMilli / 14).ceil();
+      final onHandMilli = row['on_hand_milli']! as int;
+      final targetMilli = averageDailySoldMilli * 7;
+      final suggestedMilli =
+          targetMilli > onHandMilli ? targetMilli - onHandMilli : 0;
+      if (suggestedMilli <= 0) continue;
+
+      final daysCover = onHandMilli <= 0
+          ? 0
+          : onHandMilli ~/ averageDailySoldMilli;
+      insights.add(
+        LocalBusinessInsight(
+          id: 'purchase-${row['id']}-${generatedAt.toIso8601String()}',
+          type: 'purchase_suggestion',
+          classification: InsightClassification.recommendation,
+          title: 'Consider ordering ${row['name']}',
+          message:
+              '${row['name']} has about $daysCover day${daysCover == 1 ? '' : 's'} '
+              'of stock at the recent sales rate. Consider ordering '
+              '${_formatMilliQuantity(suggestedMilli)} units for about 7 days of coverage.',
+          evidence: [
+            InsightEvidence(
+              sourceType: 'stock_movement',
+              sourceId: row['id']! as String,
+              metric: 'on_hand_milli',
+              value: onHandMilli,
+            ),
+            InsightEvidence(
+              sourceType: 'sale_line',
+              sourceId: row['id']! as String,
+              metric: 'sold_milli',
+              value: soldMilli,
+              window: 'last_14_days',
+            ),
+            InsightEvidence(
+              sourceType: 'calculation',
+              metric: 'target_coverage_days',
+              value: 7,
+            ),
+          ],
+          generatedAt: generatedAt,
+        ),
+      );
+    }
+
+    final winBackThreshold =
+        generatedAt.subtract(const Duration(days: 30)).toIso8601String();
+    final winBackRows = await _database.rawQuery(
+      '''
+      SELECT
+        c.id,
+        c.name,
+        COUNT(s.id) AS purchase_count,
+        MAX(s.local_created_at) AS last_purchase
+      FROM customer c
+      INNER JOIN sale s ON s.customer_id = c.id
+      WHERE s.status = 'finalized'
+      GROUP BY c.id, c.name
+      HAVING COUNT(s.id) >= 2
+        AND MAX(s.local_created_at) < ?
+      ORDER BY last_purchase
+      ''',
+      [winBackThreshold],
+    );
+    if (winBackRows.isNotEmpty) {
+      insights.add(
+        LocalBusinessInsight(
+          id: 'winback-${generatedAt.toIso8601String()}',
+          type: 'customer_winback',
+          classification: InsightClassification.recommendation,
+          title: 'Customers may be worth reconnecting with',
+          message:
+              '${winBackRows.length} previously repeat customer'
+              '${winBackRows.length == 1 ? '' : 's'} have not purchased in 30 days.',
+          evidence: [
+            for (final row in winBackRows.take(10))
+              InsightEvidence(
+                sourceType: 'sale',
+                sourceId: row['id']! as String,
+                metric: 'last_purchase',
+                value: row['last_purchase']! as String,
+                window: 'customer_history',
+              ),
+          ],
+          generatedAt: generatedAt,
+        ),
+      );
+    }
+
+    final variance = metrics.latestCashVarianceMinor;
+    if (variance != null && variance.abs() > 50000) {
+      insights.add(
+        LocalBusinessInsight(
+          id: 'cash-anomaly-${generatedAt.toIso8601String()}',
+          type: 'cash_anomaly',
+          classification: InsightClassification.calculation,
+          title: 'Cash difference needs attention',
+          message:
+              'The latest closed shift differs by ${formatInr(variance.abs())} '
+              'from expected cash.',
+          evidence: [
+            InsightEvidence(
+              sourceType: 'shift',
+              metric: 'variance_minor',
+              value: variance,
+            ),
+          ],
+          generatedAt: generatedAt,
+        ),
+      );
+    }
+
+    return insights;
+  }
+
+  String _formatMilliQuantity(int milli) {
+    final whole = milli ~/ 1000;
+    final fraction = (milli % 1000).toString().padLeft(3, '0');
+    if (fraction == '000') return '$whole';
+    return '$whole.${fraction.replaceFirst(RegExp(r'0+
+    final rows = await _database.rawQuery(
+      "SELECT COUNT(*) AS count FROM sync_outbox WHERE state = 'pending'",
+    );
+    return (rows.single['count'] as int?) ?? 0;
+  }
+
+  Future<int> paymentEventCountForSale(String saleId) async {
+    final rows = await _database.rawQuery(
+      '''
+      SELECT COUNT(*) AS count
+      FROM payment_event pe
+      INNER JOIN payment p ON p.id = pe.payment_id
+      WHERE p.sale_id = ?
+      ''',
+      [saleId],
+    );
+    return (rows.single['count'] as int?) ?? 0;
+  }
+
+  Future<List<LocalInventoryItem>> listInventory() async {
+    final rows = await _database.rawQuery('''
+      SELECT
+        p.id,
+        p.name,
+        p.barcode,
+        p.reorder_level_milli,
+        COALESCE(SUM(sm.quantity_delta_milli), 0) AS on_hand_milli
+      FROM product p
+      LEFT JOIN stock_movement sm ON sm.product_id = p.id
+      WHERE p.active = 1
+      GROUP BY p.id, p.name, p.barcode, p.reorder_level_milli
+      ORDER BY p.name COLLATE NOCASE
+    ''');
+    return rows
+        .map(
+          (row) => LocalInventoryItem(
+            productId: row['id']! as String,
+            name: row['name']! as String,
+            barcode: row['barcode'] as String?,
+            onHandMilli: row['on_hand_milli']! as int,
+            reorderLevelMilli: row['reorder_level_milli']! as int,
+          ),
+        )
+        .toList();
+  }
+
+  Future<void> setReorderLevel({
+    required String productId,
+    required int reorderLevelMilli,
+  }) async {
+    if (reorderLevelMilli < 0) {
+      throw ArgumentError('Reorder level cannot be negative');
+    }
+    await _database.update(
+      'product',
+      {'reorder_level_milli': reorderLevelMilli},
+      where: 'id = ?',
+      whereArgs: [productId],
+    );
+  }
+
+  Future<String> _insertStockMovement(
+    DatabaseExecutor executor, {
+    required LocalSaleContext context,
+    required String productId,
+    required StockMovementType type,
+    required int quantityDeltaMilli,
+    String? reason,
+    String? sourceEntityType,
+    String? sourceEntityId,
+  }) async {
+    validateStockMovement(
+      type: type,
+      quantityDeltaMilli: quantityDeltaMilli,
+      reason: reason,
+    );
+    final movementId = _uuid.v4();
+    final idempotencyKey = _uuid.v4();
+    final now = DateTime.now().toUtc();
+
+    await executor.insert('stock_movement', {
+      'id': movementId,
+      'product_id': productId,
+      'movement_type': stockMovementTypeValue(type),
+      'quantity_delta_milli': quantityDeltaMilli,
+      'reason': reason?.trim(),
+      'source_entity_type': sourceEntityType,
+      'source_entity_id': sourceEntityId,
+      'occurred_at': now.toIso8601String(),
+      'idempotency_key': idempotencyKey,
+    });
+    await executor.insert('sync_outbox', {
+      'id': _uuid.v4(),
+      'entity_type': 'stock_movement',
+      'entity_id': movementId,
+      'organization_id': context.organizationId,
+      'business_id': context.businessId,
+      'store_id': context.storeId,
+      'terminal_id': context.terminalId,
+      'idempotency_key': idempotencyKey,
+      'payload_json': jsonEncode({
+        'movementId': movementId,
+        'productId': productId,
+        'movementType': stockMovementTypeValue(type),
+        'quantityDeltaMilli': quantityDeltaMilli,
+        'reason': reason?.trim(),
+        'sourceEntityType': sourceEntityType,
+        'sourceEntityId': sourceEntityId,
+        'occurredAt': now.toIso8601String(),
+      }),
+      'state': 'pending',
+      'created_at': now.toIso8601String(),
+    });
+    return movementId;
+  }
+
+  Future<String> recordStockMovement({
+    required LocalSaleContext context,
+    required String productId,
+    required StockMovementType type,
+    required int quantityDeltaMilli,
+    String? reason,
+  }) {
+    return _database.transaction(
+      (txn) => _insertStockMovement(
+        txn,
+        context: context,
+        productId: productId,
+        type: type,
+        quantityDeltaMilli: quantityDeltaMilli,
+        reason: reason,
+      ),
+    );
+  }
+
+  Future<String?> countStock({
+    required LocalSaleContext context,
+    required String productId,
+    required int countedMilli,
+    required String reason,
+  }) {
+    if (countedMilli < 0) {
+      throw ArgumentError('Counted stock cannot be negative');
+    }
+    if (reason.trim().isEmpty) {
+      throw ArgumentError('A reason is required');
+    }
+
+    return _database.transaction((txn) async {
+      final rows = await txn.rawQuery(
+        '''
+        SELECT COALESCE(SUM(quantity_delta_milli), 0) AS on_hand_milli
+        FROM stock_movement
+        WHERE product_id = ?
+        ''',
+        [productId],
+      );
+      final current = rows.single['on_hand_milli']! as int;
+      final delta = countAdjustmentDelta(
+        currentOnHandMilli: current,
+        countedMilli: countedMilli,
+      );
+      if (delta == 0) {
+        return null;
+      }
+      return _insertStockMovement(
+        txn,
+        context: context,
+        productId: productId,
+        type: StockMovementType.adjustment,
+        quantityDeltaMilli: delta,
+        reason: reason,
+      );
+    });
+  }
+
+  Future<OfflineSaleResult> finalizeCashSale({
+    required LocalSaleContext context,
+    required List<SaleLineInput> lines,
+    required int tenderedMinor,
+    String? customerId,
+  }) {
+    return _finalizeSale(
+      context: context,
+      lines: lines,
+      paymentMethod: 'cash',
+      tenderedMinor: tenderedMinor,
+      customerId: customerId,
+    );
+  }
+
+  Future<OfflineSaleResult> finalizeCustomerCreditSale({
+    required LocalSaleContext context,
+    required List<SaleLineInput> lines,
+    required String customerId,
+    DateTime? dueDate,
+  }) {
+    return _finalizeSale(
+      context: context,
+      lines: lines,
+      paymentMethod: 'customer_credit',
+      customerId: customerId,
+      dueDate: dueDate,
+    );
+  }
+
+  Future<OfflineSaleResult> _finalizeSale({
+    required LocalSaleContext context,
+    required List<SaleLineInput> lines,
+    required String paymentMethod,
+    int? tenderedMinor,
+    String? customerId,
+    DateTime? dueDate,
+  }) async {
+    final totals = priceSale(lines, context.taxMode);
+    final isCash = paymentMethod == 'cash';
+    final isCredit = paymentMethod == 'customer_credit';
+    if (!isCash && !isCredit) {
+      throw ArgumentError('Unsupported local payment method');
+    }
+    if (isCredit && customerId == null) {
+      throw ArgumentError('Customer is required for Pay Later');
+    }
+
+    final tendered = isCash ? tenderedMinor : 0;
+    if (isCash && tendered == null) {
+      throw ArgumentError('Cash tender is required');
+    }
+    final changeMinor =
+        isCash ? cashChangeDue(totals.totalMinor, tendered!) : 0;
+
+    final saleId = _uuid.v4();
+    final now = DateTime.now().toUtc();
+    late final String invoiceNumber;
+
+    await _database.transaction((txn) async {
+      if (isCredit) {
+        final customers = await txn.query(
+          'customer',
+          columns: ['id'],
+          where: 'id = ?',
+          whereArgs: [customerId],
+          limit: 1,
+        );
+        if (customers.isEmpty) {
+          throw StateError('Customer not found');
+        }
+      }
+
+      final sequenceRows = await txn.query(
+        'terminal_sequence',
+        columns: ['next_invoice'],
+        where: 'terminal_code = ?',
+        whereArgs: [context.terminalCode],
+        limit: 1,
+      );
+      if (sequenceRows.isEmpty) {
+        throw StateError('Terminal invoice sequence is missing');
+      }
+      final nextInvoice = sequenceRows.single['next_invoice']! as int;
+      invoiceNumber =
+          '${context.terminalCode}-${nextInvoice.toString().padLeft(6, '0')}';
+      await txn.update(
+        'terminal_sequence',
+        {'next_invoice': nextInvoice + 1},
+        where: 'terminal_code = ?',
+        whereArgs: [context.terminalCode],
+      );
+
+      final shiftId = await _openShiftId(txn);
+      await txn.insert('sale', {
+        'id': saleId,
+        'organization_id': context.organizationId,
+        'business_id': context.businessId,
+        'store_id': context.storeId,
+        'terminal_id': context.terminalId,
+        'cashier_user_id': context.userId,
+        'customer_id': customerId,
+        'shift_id': shiftId,
+        'invoice_number': invoiceNumber,
+        'local_created_at': now.toIso8601String(),
+        'subtotal_minor': totals.subtotalMinor,
+        'discount_minor': totals.discountMinor,
+        'tax_minor': totals.taxMinor,
+        'total_minor': totals.totalMinor,
+        'status': 'finalized',
+      });
+
+      for (final line in totals.lines) {
+        await txn.insert('sale_line', {
+          'id': _uuid.v4(),
+          'sale_id': saleId,
+          'product_id': line.product.id,
+          'product_name_snapshot': line.product.name,
+          'quantity_milli': line.quantityMilli,
+          'unit_price_minor': line.product.unitPriceMinor,
+          'gross_minor': line.grossMinor,
+          'discount_minor': line.discountMinor,
+          'taxable_minor': line.taxableMinor,
+          'cgst_minor': line.cgstMinor,
+          'sgst_minor': line.sgstMinor,
+          'igst_minor': line.igstMinor,
+          'tax_minor': line.taxMinor,
+          'total_minor': line.totalMinor,
+        });
+        await txn.insert('stock_movement', {
+          'id': _uuid.v4(),
+          'product_id': line.product.id,
+          'movement_type': 'sale',
+          'quantity_delta_milli': -line.quantityMilli,
+          'source_entity_type': 'sale',
+          'source_entity_id': saleId,
+          'occurred_at': now.toIso8601String(),
+          'idempotency_key': 'sale:$saleId:${line.product.id}',
+        });
+      }
+
+      final paymentId = _uuid.v4();
+      await txn.insert('payment', {
+        'id': paymentId,
+        'sale_id': saleId,
+        'method': paymentMethod,
+        'amount_minor': totals.totalMinor,
+        'tendered_minor': tendered ?? 0,
+        'change_minor': changeMinor,
+        'status': 'captured',
+        'reconciliation_status': 'not_applicable',
+        'created_at': now.toIso8601String(),
+      });
+      await txn.insert('payment_event', {
+        'id': _uuid.v4(),
+        'payment_id': paymentId,
+        'event_type': 'captured',
+        'payment_status': 'captured',
+        'amount_minor': totals.totalMinor,
+        'occurred_at': now.toIso8601String(),
+        'metadata_json': jsonEncode({'method': paymentMethod}),
+      });
+
+      if (isCredit) {
+        await txn.insert('customer_credit_entry', {
+          'id': _uuid.v4(),
+          'customer_id': customerId,
+          'entry_type': 'charge',
+          'amount_minor': totals.totalMinor,
+          'sale_id': saleId,
+          'due_date': dueDate?.toIso8601String().split('T').first,
+          'occurred_at': now.toIso8601String(),
+          'idempotency_key': 'credit:$saleId',
+        });
+      }
+
+      final idempotencyKey = _uuid.v4();
+      await txn.insert('sync_outbox', {
+        'id': _uuid.v4(),
+        'entity_type': 'sale',
+        'entity_id': saleId,
+        'organization_id': context.organizationId,
+        'business_id': context.businessId,
+        'store_id': context.storeId,
+        'terminal_id': context.terminalId,
+        'idempotency_key': idempotencyKey,
+        'payload_json': jsonEncode({
+          'saleId': saleId,
+          'customerId': customerId,
+          'invoiceNumber': invoiceNumber,
+          'createdAt': now.toIso8601String(),
+          'subtotalMinor': totals.subtotalMinor,
+          'discountMinor': totals.discountMinor,
+          'taxMinor': totals.taxMinor,
+          'totalMinor': totals.totalMinor,
+          'payment': {
+            'method': paymentMethod,
+            'amountMinor': totals.totalMinor,
+            'tenderedMinor': tendered ?? 0,
+            'changeMinor': changeMinor,
+          },
+          'creditDueDate': dueDate?.toIso8601String().split('T').first,
+          'lines': totals.lines
+              .map(
+                (line) => {
+                  'productId': line.product.id,
+                  'name': line.product.name,
+                  'quantityMilli': line.quantityMilli,
+                  'unitPriceMinor': line.product.unitPriceMinor,
+                  'discountMinor': line.discountMinor,
+                  'taxMinor': line.taxMinor,
+                  'totalMinor': line.totalMinor,
+                },
+              )
+              .toList(),
+        }),
+        'state': 'pending',
+        'created_at': now.toIso8601String(),
+      });
+    });
+
+    final receipt = StringBuffer()
+      ..writeln(context.businessName)
+      ..writeln(context.storeName)
+      ..writeln('Bill $invoiceNumber')
+      ..writeln('------------------------');
+    for (final line in totals.lines) {
+      receipt.writeln(
+        '${line.product.name}  ${line.quantityMilli / 1000}  ${formatInr(line.totalMinor)}',
+      );
+    }
+    receipt
+      ..writeln('------------------------')
+      ..writeln('Total  ${formatInr(totals.totalMinor)}');
+
+    if (isCash) {
+      receipt
+        ..writeln('Cash   ${formatInr(tendered!)}')
+        ..writeln('Return ${formatInr(changeMinor)}');
+    } else {
+      receipt.writeln('Customer Credit  ${formatInr(totals.totalMinor)}');
+      if (dueDate != null) {
+        receipt.writeln(
+          'Due ${dueDate.toIso8601String().split('T').first}',
+        );
+      }
+    }
+
+    return OfflineSaleResult(
+      saleId: saleId,
+      invoiceNumber: invoiceNumber,
+      totalMinor: totals.totalMinor,
+      tenderedMinor: tendered ?? 0,
+      changeMinor: changeMinor,
+      receiptText: receipt.toString(),
+    );
+  }
+}
+), '')}';
   }
 
   Future<int> pendingOutboxCount() async {
