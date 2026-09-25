@@ -52,8 +52,8 @@ void main() {
     const terminal = UnconfiguredPaymentTerminalAdapter();
 
     expect(drawer.configured, isFalse);
-    await expectLater(
-      drawer.open(
+    expect(
+      () => drawer.open(
         const HardwareCommandContext(
           terminalId: 'terminal-1',
           sourceEntityType: 'sale',
@@ -62,10 +62,13 @@ void main() {
       ),
       throwsStateError,
     );
-    await expectLater(scale.readWeightMilli(), throwsStateError);
-    await expectLater(display.showTotalMinor(10000), throwsStateError);
-    await expectLater(
-      terminal.beginProviderFlow(amountMinor: 10000, paymentId: 'payment-1'),
+    expect(scale.readWeightMilli, throwsStateError);
+    expect(() => display.showTotalMinor(10000), throwsStateError);
+    expect(
+      () => terminal.beginProviderFlow(
+        amountMinor: 10000,
+        paymentId: 'payment-1',
+      ),
       throwsStateError,
     );
   });
