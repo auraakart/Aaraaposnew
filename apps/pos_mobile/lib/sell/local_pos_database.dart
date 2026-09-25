@@ -6,6 +6,7 @@ import 'package:uuid/uuid.dart';
 
 import '../accounting/accounting_domain.dart';
 import '../ai/ai_domain.dart';
+import '../commerce/commerce_domain.dart';
 import '../customers/customer_domain.dart';
 import '../intelligence/owner_intelligence.dart';
 import '../inventory/inventory_domain.dart';
@@ -92,7 +93,7 @@ class LocalPosDatabase {
     _db = await _factory.openDatabase(
       path,
       options: OpenDatabaseOptions(
-        version: 9,
+        version: 10,
         onConfigure: (db) async {
           await db.execute('PRAGMA foreign_keys = ON');
         },
@@ -527,6 +528,31 @@ class LocalPosDatabase {
               last_error TEXT
             )
           ''');
+          await db.execute('''
+            CREATE TABLE commerce_order (
+              id TEXT PRIMARY KEY,
+              channel TEXT NOT NULL,
+              status TEXT NOT NULL,
+              customer_id TEXT REFERENCES customer(id),
+              external_conversation_ref TEXT,
+              note TEXT,
+              sale_id TEXT UNIQUE REFERENCES sale(id),
+              received_at TEXT NOT NULL,
+              updated_at TEXT NOT NULL,
+              idempotency_key TEXT NOT NULL UNIQUE
+            )
+          ''');
+          await db.execute('''
+            CREATE TABLE commerce_order_line (
+              id TEXT PRIMARY KEY,
+              commerce_order_id TEXT NOT NULL
+                REFERENCES commerce_order(id) ON DELETE CASCADE,
+              product_id TEXT NOT NULL REFERENCES product(id),
+              quantity_milli INTEGER NOT NULL,
+              quoted_unit_price_minor INTEGER NOT NULL,
+              UNIQUE (commerce_order_id, product_id)
+            )
+          ''');
         },
         onUpgrade: (db, oldVersion, newVersion) async {
           if (oldVersion < 2) {
@@ -931,6 +957,33 @@ class LocalPosDatabase {
               "ALTER TABLE sync_outbox ADD COLUMN last_attempt_at TEXT",
             );
           }
+          if (oldVersion < 10) {
+            await db.execute('''
+              CREATE TABLE commerce_order (
+                id TEXT PRIMARY KEY,
+                channel TEXT NOT NULL,
+                status TEXT NOT NULL,
+                customer_id TEXT REFERENCES customer(id),
+                external_conversation_ref TEXT,
+                note TEXT,
+                sale_id TEXT UNIQUE REFERENCES sale(id),
+                received_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                idempotency_key TEXT NOT NULL UNIQUE
+              )
+            ''');
+            await db.execute('''
+              CREATE TABLE commerce_order_line (
+                id TEXT PRIMARY KEY,
+                commerce_order_id TEXT NOT NULL
+                  REFERENCES commerce_order(id) ON DELETE CASCADE,
+                product_id TEXT NOT NULL REFERENCES product(id),
+                quantity_milli INTEGER NOT NULL,
+                quoted_unit_price_minor INTEGER NOT NULL,
+                UNIQUE (commerce_order_id, product_id)
+              )
+            ''');
+          }
         },
       ),
     );
@@ -1097,6 +1150,283 @@ class LocalPosDatabase {
       'active': 1,
     });
     return product;
+  }
+
+  Future<String> createCommerceOrder({
+    required LocalSaleContext context,
+    required CommerceChannel channel,
+    required List<SaleLineInput> lines,
+    String? customerId,
+    String? externalConversationRef,
+    String? note,
+  }) async {
+    if (lines.isEmpty) {
+      throw ArgumentError('Order requires at least one item');
+    }
+    final productIds = <String>{};
+    for (final line in lines) {
+      if (line.quantityMilli <= 0 || !productIds.add(line.product.id)) {
+        throw ArgumentError('Invalid or duplicate order item');
+      }
+    }
+
+    final orderId = _uuid.v4();
+    final idempotencyKey = _uuid.v4();
+    final now = DateTime.now().toUtc();
+
+    await _database.transaction((txn) async {
+      if (customerId != null) {
+        final customers = await txn.query(
+          'customer',
+          columns: ['id'],
+          where: 'id = ?',
+          whereArgs: [customerId],
+          limit: 1,
+        );
+        if (customers.isEmpty) throw StateError('Customer not found');
+      }
+      await txn.insert('commerce_order', {
+        'id': orderId,
+        'channel': commerceChannelValue(channel),
+        'status': 'received',
+        'customer_id': customerId,
+        'external_conversation_ref':
+            externalConversationRef?.trim().isEmpty ?? true
+                ? null
+                : externalConversationRef!.trim(),
+        'note': note?.trim().isEmpty ?? true ? null : note!.trim(),
+        'received_at': now.toIso8601String(),
+        'updated_at': now.toIso8601String(),
+        'idempotency_key': idempotencyKey,
+      });
+      for (final line in lines) {
+        await txn.insert('commerce_order_line', {
+          'id': _uuid.v4(),
+          'commerce_order_id': orderId,
+          'product_id': line.product.id,
+          'quantity_milli': line.quantityMilli,
+          'quoted_unit_price_minor': line.product.unitPriceMinor,
+        });
+      }
+      await txn.insert('sync_outbox', {
+        'id': _uuid.v4(),
+        'entity_type': 'commerce_order',
+        'entity_id': orderId,
+        'organization_id': context.organizationId,
+        'business_id': context.businessId,
+        'store_id': context.storeId,
+        'terminal_id': context.terminalId,
+        'idempotency_key': idempotencyKey,
+        'payload_json': jsonEncode({
+          'commerceOrderId': orderId,
+          'channel': commerceChannelValue(channel),
+          'status': 'received',
+          'customerId': customerId,
+          'externalConversationRef': externalConversationRef?.trim(),
+          'note': note?.trim(),
+          'receivedAt': now.toIso8601String(),
+          'lines': [
+            for (final line in lines)
+              {
+                'productId': line.product.id,
+                'quantityMilli': line.quantityMilli,
+                'quotedUnitPriceMinor': line.product.unitPriceMinor,
+              },
+          ],
+        }),
+        'state': 'pending',
+        'created_at': now.toIso8601String(),
+      });
+    });
+
+    return orderId;
+  }
+
+  Future<List<LocalCommerceOrder>> listCommerceOrders({
+    bool includeClosed = true,
+  }) async {
+    final customers = {
+      for (final customer in await listCustomers()) customer.id: customer,
+    };
+    final headers = await _database.query(
+      'commerce_order',
+      where: includeClosed
+          ? null
+          : "status NOT IN ('completed', 'cancelled')",
+      orderBy: 'received_at DESC',
+    );
+    final result = <LocalCommerceOrder>[];
+    for (final header in headers) {
+      final orderId = header['id']! as String;
+      final lineRows = await _database.rawQuery(
+        '''
+        SELECT
+          col.quantity_milli,
+          col.quoted_unit_price_minor,
+          p.*
+        FROM commerce_order_line col
+        INNER JOIN product p ON p.id = col.product_id
+        WHERE col.commerce_order_id = ?
+        ORDER BY p.name COLLATE NOCASE
+        ''',
+        [orderId],
+      );
+      final lines = lineRows
+          .map(
+            (row) => CommerceOrderLine(
+              product: Product(
+                id: row['id']! as String,
+                name: row['name']! as String,
+                barcode: row['barcode'] as String?,
+                unitPriceMinor: row['unit_price_minor']! as int,
+                taxRateBps: row['tax_rate_bps']! as int,
+                taxPriceMode: row['tax_price_mode'] == 'exclusive'
+                    ? TaxPriceMode.exclusive
+                    : TaxPriceMode.inclusive,
+              ),
+              quantityMilli: row['quantity_milli']! as int,
+              quotedUnitPriceMinor:
+                  row['quoted_unit_price_minor']! as int,
+            ),
+          )
+          .toList();
+      result.add(
+        LocalCommerceOrder(
+          id: orderId,
+          channel: commerceChannelFromValue(header['channel']! as String),
+          status:
+              commerceOrderStatusFromValue(header['status']! as String),
+          receivedAt: DateTime.parse(header['received_at']! as String),
+          lines: lines,
+          customer: customers[header['customer_id'] as String?],
+          externalConversationRef:
+              header['external_conversation_ref'] as String?,
+          note: header['note'] as String?,
+          saleId: header['sale_id'] as String?,
+        ),
+      );
+    }
+    return result;
+  }
+
+  Future<void> transitionCommerceOrder({
+    required LocalSaleContext context,
+    required String orderId,
+    required String action,
+  }) async {
+    final now = DateTime.now().toUtc();
+    final idempotencyKey = _uuid.v4();
+    await _database.transaction((txn) async {
+      final rows = await txn.query(
+        'commerce_order',
+        columns: ['status'],
+        where: 'id = ?',
+        whereArgs: [orderId],
+        limit: 1,
+      );
+      if (rows.isEmpty) throw StateError('Order not found');
+      final current =
+          commerceOrderStatusFromValue(rows.single['status']! as String);
+      if (action == 'complete') {
+        throw StateError('Complete the order only after a finalized sale');
+      }
+      final next = nextCommerceOrderStatus(current, action);
+      await txn.update(
+        'commerce_order',
+        {
+          'status': commerceOrderStatusValue(next),
+          'updated_at': now.toIso8601String(),
+        },
+        where: 'id = ?',
+        whereArgs: [orderId],
+      );
+      await txn.insert('sync_outbox', {
+        'id': _uuid.v4(),
+        'entity_type': 'commerce_order',
+        'entity_id': orderId,
+        'organization_id': context.organizationId,
+        'business_id': context.businessId,
+        'store_id': context.storeId,
+        'terminal_id': context.terminalId,
+        'idempotency_key': idempotencyKey,
+        'payload_json': jsonEncode({
+          'commerceOrderId': orderId,
+          'event': action,
+          'status': commerceOrderStatusValue(next),
+          'occurredAt': now.toIso8601String(),
+        }),
+        'state': 'pending',
+        'created_at': now.toIso8601String(),
+      });
+    });
+  }
+
+  Future<void> completeCommerceOrder({
+    required LocalSaleContext context,
+    required String orderId,
+    required String saleId,
+  }) async {
+    final now = DateTime.now().toUtc();
+    final idempotencyKey = _uuid.v4();
+    await _database.transaction((txn) async {
+      final orders = await txn.query(
+        'commerce_order',
+        columns: ['status', 'sale_id'],
+        where: 'id = ?',
+        whereArgs: [orderId],
+        limit: 1,
+      );
+      if (orders.isEmpty) throw StateError('Order not found');
+      final row = orders.single;
+      if (row['sale_id'] != null) {
+        if (row['sale_id'] == saleId) return;
+        throw StateError('Order is already linked to another sale');
+      }
+      final current =
+          commerceOrderStatusFromValue(row['status']! as String);
+      final next = nextCommerceOrderStatus(current, 'complete');
+
+      final sales = await txn.query(
+        'sale',
+        columns: ['id', 'status'],
+        where: 'id = ? AND status = ?',
+        whereArgs: [saleId, 'finalized'],
+        limit: 1,
+      );
+      if (sales.isEmpty) {
+        throw StateError('Finalized sale not found');
+      }
+
+      await txn.update(
+        'commerce_order',
+        {
+          'status': commerceOrderStatusValue(next),
+          'sale_id': saleId,
+          'updated_at': now.toIso8601String(),
+        },
+        where: 'id = ?',
+        whereArgs: [orderId],
+      );
+      await txn.insert('sync_outbox', {
+        'id': _uuid.v4(),
+        'entity_type': 'commerce_order',
+        'entity_id': orderId,
+        'organization_id': context.organizationId,
+        'business_id': context.businessId,
+        'store_id': context.storeId,
+        'terminal_id': context.terminalId,
+        'idempotency_key': idempotencyKey,
+        'payload_json': jsonEncode({
+          'commerceOrderId': orderId,
+          'event': 'completed',
+          'status': 'completed',
+          'saleId': saleId,
+          'occurredAt': now.toIso8601String(),
+        }),
+        'state': 'pending',
+        'created_at': now.toIso8601String(),
+      });
+    });
   }
 
   Future<LoyaltyProgram> loyaltyProgram() async {

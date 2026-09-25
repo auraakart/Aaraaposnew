@@ -14,11 +14,17 @@ class SellScreen extends StatefulWidget {
   const SellScreen({
     required this.database,
     required this.saleContext,
+    this.initialLines = const [],
+    this.initialCustomer,
+    this.commerceOrderId,
     super.key,
   });
 
   final LocalPosDatabase database;
   final LocalSaleContext saleContext;
+  final List<SaleLineInput> initialLines;
+  final LocalCustomer? initialCustomer;
+  final String? commerceOrderId;
 
   @override
   State<SellScreen> createState() => _SellScreenState();
@@ -36,11 +42,31 @@ class _SellScreenState extends State<SellScreen> {
   bool loading = true;
   int pendingSync = 0;
   LocalCustomer? selectedCustomer;
+  bool initialOrderApplied = false;
 
   @override
   void initState() {
     super.initState();
-    refreshProducts();
+    refreshProducts().then((_) => _applyInitialOrder());
+  }
+
+  void _applyInitialOrder() {
+    if (!mounted || initialOrderApplied || widget.initialLines.isEmpty) return;
+    setState(() {
+      for (final line in widget.initialLines) {
+        cartProducts[line.product.id] = line.product;
+        quantitiesMilli[line.product.id] = line.quantityMilli;
+        discountsMinor[line.product.id] = line.discountMinor;
+        if (line.discountSource != null) {
+          discountSources[line.product.id] = line.discountSource!;
+        }
+        if (line.discountReferenceId != null) {
+          discountReferences[line.product.id] = line.discountReferenceId!;
+        }
+      }
+      selectedCustomer = widget.initialCustomer;
+      initialOrderApplied = true;
+    });
   }
 
   @override
@@ -689,6 +715,21 @@ class _SellScreenState extends State<SellScreen> {
     required String title,
   }) async {
     if (!mounted) return;
+
+    var commerceLinkFailed = false;
+    final commerceOrderId = widget.commerceOrderId;
+    if (commerceOrderId != null) {
+      try {
+        await widget.database.completeCommerceOrder(
+          context: widget.saleContext,
+          orderId: commerceOrderId,
+          saleId: result.saleId,
+        );
+      } on Object {
+        commerceLinkFailed = true;
+      }
+    }
+    if (!mounted) return;
     setState(() {
       quantitiesMilli.clear();
       discountsMinor.clear();
@@ -732,6 +773,18 @@ class _SellScreenState extends State<SellScreen> {
         ],
       ),
     );
+
+    if (commerceLinkFailed && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Sale saved. The order link needs review in Commerce Orders.',
+          ),
+        ),
+      );
+    } else if (commerceOrderId != null && mounted) {
+      Navigator.of(context).pop();
+    }
   }
 
   Future<void> checkout() async {
