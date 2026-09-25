@@ -4552,15 +4552,15 @@ class LocalPosDatabase {
         if (customerId == null || isCredit || activeProgram == null) {
           throw StateError('Loyalty redemption requires a cash customer sale');
         }
-        validateLoyaltyProgram(activeProgram!);
-        if (!activeProgram!.enabled) {
+        validateLoyaltyProgram(activeProgram);
+        if (!activeProgram.enabled) {
           throw StateError('Loyalty program is not enabled');
         }
-        if (loyaltyRedeemedMinor % activeProgram!.redemptionMinorPerPoint != 0) {
+        if (loyaltyRedeemedMinor % activeProgram.redemptionMinorPerPoint != 0) {
           throw StateError('Loyalty discount does not match point value');
         }
         loyaltyPointsRedeemed =
-            loyaltyRedeemedMinor ~/ activeProgram!.redemptionMinorPerPoint;
+            loyaltyRedeemedMinor ~/ activeProgram.redemptionMinorPerPoint;
 
         final balanceRows = await txn.rawQuery(
           '''
@@ -4583,7 +4583,7 @@ class LocalPosDatabase {
           saleMinor: totals.totalMinor + loyaltyRedeemedMinor,
           availablePoints: balance,
           requestedPoints: loyaltyPointsRedeemed,
-          program: activeProgram!,
+          program: activeProgram,
         );
         if (allowed.points != loyaltyPointsRedeemed ||
             allowed.amountMinor != loyaltyRedeemedMinor) {
@@ -4604,7 +4604,7 @@ class LocalPosDatabase {
 
       if (customerId != null && !isCredit && activeProgram != null) {
         loyaltyPointsEarned =
-            earnedLoyaltyPoints(totals.totalMinor, activeProgram!);
+            earnedLoyaltyPoints(totals.totalMinor, activeProgram);
         if (loyaltyPointsEarned > 0) {
           await txn.insert('customer_loyalty_entry', {
             'id': _uuid.v4(),
