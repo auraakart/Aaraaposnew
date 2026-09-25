@@ -373,6 +373,19 @@ class LocalPosDatabase {
     return (rows.single['count'] as int?) ?? 0;
   }
 
+  Future<int> paymentEventCountForSale(String saleId) async {
+    final rows = await _database.rawQuery(
+      '''
+      SELECT COUNT(*) AS count
+      FROM payment_event pe
+      INNER JOIN payment p ON p.id = pe.payment_id
+      WHERE p.sale_id = ?
+      ''',
+      [saleId],
+    );
+    return (rows.single['count'] as int?) ?? 0;
+  }
+
   Future<OfflineSaleResult> finalizeCashSale({
     required LocalSaleContext context,
     required List<SaleLineInput> lines,
