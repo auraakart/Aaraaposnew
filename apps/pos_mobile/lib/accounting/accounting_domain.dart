@@ -67,11 +67,19 @@ class AccountingExportManifest {
     required this.expensesMinor,
     required this.customerCreditMinor,
     required this.supplierLedgerMinor,
-    required this.taxableMinor,
-    required this.cgstMinor,
-    required this.sgstMinor,
-    required this.igstMinor,
-    required this.unclassifiedTaxMinor,
+    required this.salesTaxableMinor,
+    required this.salesCgstMinor,
+    required this.salesSgstMinor,
+    required this.salesIgstMinor,
+    required this.returnsTaxableMinor,
+    required this.returnsCgstMinor,
+    required this.returnsSgstMinor,
+    required this.returnsIgstMinor,
+    required this.purchaseTaxableMinor,
+    required this.purchaseCgstMinor,
+    required this.purchaseSgstMinor,
+    required this.purchaseIgstMinor,
+    required this.purchaseUnclassifiedTaxMinor,
   });
 
   final int rowCount;
@@ -81,12 +89,26 @@ class AccountingExportManifest {
   final int expensesMinor;
   final int customerCreditMinor;
   final int supplierLedgerMinor;
-  final int taxableMinor;
-  final int cgstMinor;
-  final int sgstMinor;
-  final int igstMinor;
-  final int unclassifiedTaxMinor;
+  final int salesTaxableMinor;
+  final int salesCgstMinor;
+  final int salesSgstMinor;
+  final int salesIgstMinor;
+  final int returnsTaxableMinor;
+  final int returnsCgstMinor;
+  final int returnsSgstMinor;
+  final int returnsIgstMinor;
+  final int purchaseTaxableMinor;
+  final int purchaseCgstMinor;
+  final int purchaseSgstMinor;
+  final int purchaseIgstMinor;
+  final int purchaseUnclassifiedTaxMinor;
+
+  int get netSalesMinor => salesMinor - returnsMinor;
+  int get outputCgstAfterReturnsMinor => salesCgstMinor - returnsCgstMinor;
+  int get outputSgstAfterReturnsMinor => salesSgstMinor - returnsSgstMinor;
+  int get outputIgstAfterReturnsMinor => salesIgstMinor - returnsIgstMinor;
 }
+
 
 String accountingRegisterValue(AccountingRegisterKind kind) => switch (kind) {
       AccountingRegisterKind.sales => 'sales',
@@ -145,29 +167,44 @@ AccountingExportManifest buildAccountingManifest(
   var expenses = 0;
   var customerCredit = 0;
   var supplierLedger = 0;
-  var taxable = 0;
-  var cgst = 0;
-  var sgst = 0;
-  var igst = 0;
-  var unclassified = 0;
+  var salesTaxable = 0;
+  var salesCgst = 0;
+  var salesSgst = 0;
+  var salesIgst = 0;
+  var returnsTaxable = 0;
+  var returnsCgst = 0;
+  var returnsSgst = 0;
+  var returnsIgst = 0;
+  var purchaseTaxable = 0;
+  var purchaseCgst = 0;
+  var purchaseSgst = 0;
+  var purchaseIgst = 0;
+  var purchaseUnclassifiedTax = 0;
 
   for (final row in rows) {
     validateAccountingRow(row);
-    taxable += row.tax.taxableMinor;
-    cgst += row.tax.cgstMinor;
-    sgst += row.tax.sgstMinor;
-    igst += row.tax.igstMinor;
-    unclassified += row.tax.unclassifiedTaxMinor;
-
     switch (row.kind) {
       case AccountingRegisterKind.sales:
         sales += row.totalMinor;
+        salesTaxable += row.tax.taxableMinor;
+        salesCgst += row.tax.cgstMinor;
+        salesSgst += row.tax.sgstMinor;
+        salesIgst += row.tax.igstMinor;
         break;
       case AccountingRegisterKind.returns:
         returns += row.totalMinor;
+        returnsTaxable += row.tax.taxableMinor;
+        returnsCgst += row.tax.cgstMinor;
+        returnsSgst += row.tax.sgstMinor;
+        returnsIgst += row.tax.igstMinor;
         break;
       case AccountingRegisterKind.purchases:
         purchases += row.totalMinor;
+        purchaseTaxable += row.tax.taxableMinor;
+        purchaseCgst += row.tax.cgstMinor;
+        purchaseSgst += row.tax.sgstMinor;
+        purchaseIgst += row.tax.igstMinor;
+        purchaseUnclassifiedTax += row.tax.unclassifiedTaxMinor;
         break;
       case AccountingRegisterKind.expenses:
         expenses += row.totalMinor;
@@ -189,11 +226,19 @@ AccountingExportManifest buildAccountingManifest(
     expensesMinor: expenses,
     customerCreditMinor: customerCredit,
     supplierLedgerMinor: supplierLedger,
-    taxableMinor: taxable,
-    cgstMinor: cgst,
-    sgstMinor: sgst,
-    igstMinor: igst,
-    unclassifiedTaxMinor: unclassified,
+    salesTaxableMinor: salesTaxable,
+    salesCgstMinor: salesCgst,
+    salesSgstMinor: salesSgst,
+    salesIgstMinor: salesIgst,
+    returnsTaxableMinor: returnsTaxable,
+    returnsCgstMinor: returnsCgst,
+    returnsSgstMinor: returnsSgst,
+    returnsIgstMinor: returnsIgst,
+    purchaseTaxableMinor: purchaseTaxable,
+    purchaseCgstMinor: purchaseCgst,
+    purchaseSgstMinor: purchaseSgst,
+    purchaseIgstMinor: purchaseIgst,
+    purchaseUnclassifiedTaxMinor: purchaseUnclassifiedTax,
   );
 }
 
