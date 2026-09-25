@@ -82,7 +82,7 @@ class LocalPosDatabase {
     _db = await _factory.openDatabase(
       path,
       options: OpenDatabaseOptions(
-        version: 4,
+        version: 5,
         onConfigure: (db) async {
           await db.execute('PRAGMA foreign_keys = ON');
         },
@@ -208,6 +208,86 @@ class LocalPosDatabase {
             )
           ''');
           await db.execute('''
+            CREATE TABLE supplier (
+              id TEXT PRIMARY KEY,
+              name TEXT NOT NULL,
+              mobile_e164 TEXT,
+              gstin TEXT,
+              created_at TEXT NOT NULL,
+              updated_at TEXT NOT NULL
+            )
+          ''');
+          await db.execute('''
+            CREATE TABLE purchase_order (
+              id TEXT PRIMARY KEY,
+              supplier_id TEXT NOT NULL REFERENCES supplier(id),
+              order_number TEXT NOT NULL UNIQUE,
+              status TEXT NOT NULL,
+              ordered_at TEXT NOT NULL,
+              note TEXT
+            )
+          ''');
+          await db.execute('''
+            CREATE TABLE purchase_order_line (
+              id TEXT PRIMARY KEY,
+              purchase_order_id TEXT NOT NULL REFERENCES purchase_order(id),
+              product_id TEXT NOT NULL REFERENCES product(id),
+              quantity_ordered_milli INTEGER NOT NULL,
+              quantity_received_milli INTEGER NOT NULL DEFAULT 0,
+              unit_cost_minor INTEGER NOT NULL,
+              tax_minor INTEGER NOT NULL DEFAULT 0
+            )
+          ''');
+          await db.execute('''
+            CREATE TABLE purchase_receipt (
+              id TEXT PRIMARY KEY,
+              supplier_id TEXT NOT NULL REFERENCES supplier(id),
+              purchase_order_id TEXT REFERENCES purchase_order(id),
+              supplier_invoice_number TEXT,
+              received_at TEXT NOT NULL,
+              total_minor INTEGER NOT NULL,
+              idempotency_key TEXT NOT NULL UNIQUE
+            )
+          ''');
+          await db.execute('''
+            CREATE TABLE purchase_receipt_line (
+              id TEXT PRIMARY KEY,
+              purchase_receipt_id TEXT NOT NULL REFERENCES purchase_receipt(id),
+              purchase_order_line_id TEXT REFERENCES purchase_order_line(id),
+              product_id TEXT NOT NULL REFERENCES product(id),
+              quantity_received_milli INTEGER NOT NULL,
+              unit_cost_minor INTEGER NOT NULL,
+              tax_minor INTEGER NOT NULL DEFAULT 0,
+              line_total_minor INTEGER NOT NULL
+            )
+          ''');
+          await db.execute('''
+            CREATE TABLE purchase_return (
+              id TEXT PRIMARY KEY,
+              supplier_id TEXT NOT NULL REFERENCES supplier(id),
+              purchase_receipt_id TEXT REFERENCES purchase_receipt(id),
+              product_id TEXT NOT NULL REFERENCES product(id),
+              quantity_returned_milli INTEGER NOT NULL,
+              credit_minor INTEGER NOT NULL,
+              reason TEXT NOT NULL,
+              returned_at TEXT NOT NULL,
+              idempotency_key TEXT NOT NULL UNIQUE
+            )
+          ''');
+          await db.execute('''
+            CREATE TABLE supplier_ledger_entry (
+              id TEXT PRIMARY KEY,
+              supplier_id TEXT NOT NULL REFERENCES supplier(id),
+              entry_type TEXT NOT NULL,
+              amount_minor INTEGER NOT NULL,
+              source_id TEXT,
+              payment_method TEXT,
+              note TEXT,
+              occurred_at TEXT NOT NULL,
+              idempotency_key TEXT NOT NULL UNIQUE
+            )
+          ''');
+          await db.execute('''
             CREATE TABLE stock_movement (
               id TEXT PRIMARY KEY,
               product_id TEXT NOT NULL REFERENCES product(id),
@@ -305,6 +385,88 @@ class LocalPosDatabase {
                 sale_id TEXT REFERENCES sale(id),
                 collection_method TEXT,
                 due_date TEXT,
+                note TEXT,
+                occurred_at TEXT NOT NULL,
+                idempotency_key TEXT NOT NULL UNIQUE
+              )
+            ''');
+          }
+          if (oldVersion < 5) {
+            await db.execute('''
+              CREATE TABLE supplier (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                mobile_e164 TEXT,
+                gstin TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+              )
+            ''');
+            await db.execute('''
+              CREATE TABLE purchase_order (
+                id TEXT PRIMARY KEY,
+                supplier_id TEXT NOT NULL REFERENCES supplier(id),
+                order_number TEXT NOT NULL UNIQUE,
+                status TEXT NOT NULL,
+                ordered_at TEXT NOT NULL,
+                note TEXT
+              )
+            ''');
+            await db.execute('''
+              CREATE TABLE purchase_order_line (
+                id TEXT PRIMARY KEY,
+                purchase_order_id TEXT NOT NULL REFERENCES purchase_order(id),
+                product_id TEXT NOT NULL REFERENCES product(id),
+                quantity_ordered_milli INTEGER NOT NULL,
+                quantity_received_milli INTEGER NOT NULL DEFAULT 0,
+                unit_cost_minor INTEGER NOT NULL,
+                tax_minor INTEGER NOT NULL DEFAULT 0
+              )
+            ''');
+            await db.execute('''
+              CREATE TABLE purchase_receipt (
+                id TEXT PRIMARY KEY,
+                supplier_id TEXT NOT NULL REFERENCES supplier(id),
+                purchase_order_id TEXT REFERENCES purchase_order(id),
+                supplier_invoice_number TEXT,
+                received_at TEXT NOT NULL,
+                total_minor INTEGER NOT NULL,
+                idempotency_key TEXT NOT NULL UNIQUE
+              )
+            ''');
+            await db.execute('''
+              CREATE TABLE purchase_receipt_line (
+                id TEXT PRIMARY KEY,
+                purchase_receipt_id TEXT NOT NULL REFERENCES purchase_receipt(id),
+                purchase_order_line_id TEXT REFERENCES purchase_order_line(id),
+                product_id TEXT NOT NULL REFERENCES product(id),
+                quantity_received_milli INTEGER NOT NULL,
+                unit_cost_minor INTEGER NOT NULL,
+                tax_minor INTEGER NOT NULL DEFAULT 0,
+                line_total_minor INTEGER NOT NULL
+              )
+            ''');
+            await db.execute('''
+              CREATE TABLE purchase_return (
+                id TEXT PRIMARY KEY,
+                supplier_id TEXT NOT NULL REFERENCES supplier(id),
+                purchase_receipt_id TEXT REFERENCES purchase_receipt(id),
+                product_id TEXT NOT NULL REFERENCES product(id),
+                quantity_returned_milli INTEGER NOT NULL,
+                credit_minor INTEGER NOT NULL,
+                reason TEXT NOT NULL,
+                returned_at TEXT NOT NULL,
+                idempotency_key TEXT NOT NULL UNIQUE
+              )
+            ''');
+            await db.execute('''
+              CREATE TABLE supplier_ledger_entry (
+                id TEXT PRIMARY KEY,
+                supplier_id TEXT NOT NULL REFERENCES supplier(id),
+                entry_type TEXT NOT NULL,
+                amount_minor INTEGER NOT NULL,
+                source_id TEXT,
+                payment_method TEXT,
                 note TEXT,
                 occurred_at TEXT NOT NULL,
                 idempotency_key TEXT NOT NULL UNIQUE
