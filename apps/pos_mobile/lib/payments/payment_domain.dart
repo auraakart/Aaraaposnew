@@ -151,3 +151,47 @@ String paymentMethodLabel(PaymentMethod method) {
     PaymentMethod.card => 'Card',
   };
 }
+
+
+class PaymentCoordinator {
+  PaymentCoordinator(Iterable<ExternalPaymentAdapter> adapters)
+      : _adapters = {
+          for (final adapter in adapters) adapter.method: adapter,
+        };
+
+  final Map<PaymentMethod, ExternalPaymentAdapter> _adapters;
+
+  Future<Set<PaymentMethod>> availableMethods() async {
+    final available = <PaymentMethod>{PaymentMethod.cash};
+    for (final entry in _adapters.entries) {
+      if (await entry.value.isAvailable()) {
+        available.add(entry.key);
+      }
+    }
+    return available;
+  }
+
+  Future<PaymentAllocation> initiateExternal({
+    required PaymentMethod method,
+    required PaymentProviderRequest request,
+  }) async {
+    if (method == PaymentMethod.cash) {
+      throw ArgumentError('Cash does not use an external provider adapter');
+    }
+
+    final adapter = _adapters[method];
+    if (adapter == null || !await adapter.isAvailable()) {
+      throw StateError('${paymentMethodLabel(method)} provider is not available');
+    }
+
+    final result = await adapter.initiate(request);
+    return PaymentAllocation(
+      id: request.paymentId,
+      method: method,
+      amountMinor: request.amountMinor,
+      status: result.status,
+      provider: result.provider,
+      providerReference: result.providerReference,
+    );
+  }
+}
