@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../accounting/accounting_export_screen.dart';
 import '../commerce/commerce_orders_screen.dart';
+import '../hardware/hardware_status_screen.dart';
 import '../loyalty/loyalty_promotions_screen.dart';
 import '../multistore/store_scope_screen.dart';
 import '../operations/operations_screen.dart';
@@ -25,6 +26,26 @@ class MoreScreen extends StatelessWidget {
     return ListView(
       padding: const EdgeInsets.all(16),
       children: [
+        Card(
+          child: ListTile(
+            leading: const Icon(Icons.devices_other_outlined),
+            title: const Text('Hardware & Devices'),
+            subtitle: const Text(
+              'Scanner, printer, drawer, scale and terminal readiness',
+            ),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () {
+              Navigator.of(context).push(
+                MaterialPageRoute<void>(
+                  builder: (_) => Scaffold(
+                    appBar: AppBar(title: const Text('Hardware & Devices')),
+                    body: HardwareStatusScreen(saleContext: saleContext),
+                  ),
+                ),
+              );
+            },
+          ),
+        ),
         Card(
           child: ListTile(
             leading: const Icon(Icons.shopping_bag_outlined),
