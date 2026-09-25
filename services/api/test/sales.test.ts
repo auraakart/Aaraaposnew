@@ -1,6 +1,12 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { cashChangeDue, priceSale, priceSaleLine } from "../src/sales.js";
+import {
+  cashChangeDue,
+  priceReturnLine,
+  priceSale,
+  priceSaleLine,
+  requiresDiscountApproval
+} from "../src/sales.js";
 
 test("exclusive intra-state tax splits CGST and SGST", () => {
   const line = priceSaleLine({
