@@ -107,43 +107,45 @@ void main() {
       ReconciliationStatus.mismatch,
     );
   });
+
+  test(
+    'coordinator exposes only available providers and preserves evidence',
+    () async {
+      final coordinator = PaymentCoordinator([
+        const _FakeAdapter(
+          method: PaymentMethod.upi,
+          available: true,
+          provider: 'fake-upi',
+        ),
+        const _FakeAdapter(
+          method: PaymentMethod.card,
+          available: false,
+          provider: 'fake-card',
+        ),
+      ]);
+
+      expect(
+        await coordinator.availableMethods(),
+        {PaymentMethod.cash, PaymentMethod.upi},
+      );
+
+      final allocation = await coordinator.initiateExternal(
+        method: PaymentMethod.upi,
+        request: const PaymentProviderRequest(
+          paymentId: 'pay-1',
+          amountMinor: 7500,
+          idempotencyKey: 'idem-1',
+          storeId: 'store-1',
+          terminalId: 'terminal-1',
+        ),
+      );
+
+      expect(allocation.status, PaymentStatus.captured);
+      expect(allocation.provider, 'fake-upi');
+      expect(allocation.providerReference, 'provider-ref-pay-1');
+    },
+  );
 }
-
-
-test('coordinator exposes only available providers and preserves evidence', () async {
-  final coordinator = PaymentCoordinator([
-    _FakeAdapter(
-      method: PaymentMethod.upi,
-      available: true,
-      provider: 'fake-upi',
-    ),
-    _FakeAdapter(
-      method: PaymentMethod.card,
-      available: false,
-      provider: 'fake-card',
-    ),
-  ]);
-
-  expect(
-    await coordinator.availableMethods(),
-    {PaymentMethod.cash, PaymentMethod.upi},
-  );
-
-  final allocation = await coordinator.initiateExternal(
-    method: PaymentMethod.upi,
-    request: const PaymentProviderRequest(
-      paymentId: 'pay-1',
-      amountMinor: 7500,
-      idempotencyKey: 'idem-1',
-      storeId: 'store-1',
-      terminalId: 'terminal-1',
-    ),
-  );
-
-  expect(allocation.status, PaymentStatus.captured);
-  expect(allocation.provider, 'fake-upi');
-  expect(allocation.providerReference, 'provider-ref-pay-1');
-});
 
 class _FakeAdapter implements ExternalPaymentAdapter {
   const _FakeAdapter({
