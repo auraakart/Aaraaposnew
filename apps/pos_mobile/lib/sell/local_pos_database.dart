@@ -10,6 +10,7 @@ import '../intelligence/owner_intelligence.dart';
 import '../inventory/inventory_domain.dart';
 import '../operations/operations_domain.dart';
 import '../purchases/purchase_domain.dart';
+import 'return_domain.dart';
 import 'sale_domain.dart';
 
 class LocalSaleContext {
@@ -86,7 +87,7 @@ class LocalPosDatabase {
     _db = await _factory.openDatabase(
       path,
       options: OpenDatabaseOptions(
-        version: 6,
+        version: 7,
         onConfigure: (db) async {
           await db.execute('PRAGMA foreign_keys = ON');
         },
@@ -359,6 +360,71 @@ class LocalPosDatabase {
             )
           ''');
           await db.execute('''
+            CREATE TABLE held_sale (
+              id TEXT PRIMARY KEY,
+              customer_id TEXT REFERENCES customer(id),
+              held_at TEXT NOT NULL
+            )
+          ''');
+          await db.execute('''
+            CREATE TABLE held_sale_line (
+              id TEXT PRIMARY KEY,
+              held_sale_id TEXT NOT NULL REFERENCES held_sale(id) ON DELETE CASCADE,
+              product_id TEXT NOT NULL REFERENCES product(id),
+              product_name_snapshot TEXT NOT NULL,
+              quantity_milli INTEGER NOT NULL,
+              unit_price_minor INTEGER NOT NULL,
+              discount_minor INTEGER NOT NULL DEFAULT 0,
+              tax_rate_bps INTEGER NOT NULL,
+              tax_price_mode TEXT NOT NULL
+            )
+          ''');
+          await db.execute('''
+            CREATE TABLE return_sequence (
+              terminal_code TEXT PRIMARY KEY,
+              next_return INTEGER NOT NULL
+            )
+          ''');
+          await db.execute('''
+            CREATE TABLE sale_return (
+              id TEXT PRIMARY KEY,
+              sale_id TEXT NOT NULL REFERENCES sale(id),
+              return_number TEXT NOT NULL UNIQUE,
+              reason TEXT NOT NULL,
+              total_refund_minor INTEGER NOT NULL,
+              status TEXT NOT NULL,
+              returned_at TEXT NOT NULL,
+              idempotency_key TEXT NOT NULL UNIQUE
+            )
+          ''');
+          await db.execute('''
+            CREATE TABLE sale_return_line (
+              id TEXT PRIMARY KEY,
+              sale_return_id TEXT NOT NULL REFERENCES sale_return(id),
+              sale_line_id TEXT NOT NULL REFERENCES sale_line(id),
+              product_id TEXT NOT NULL REFERENCES product(id),
+              quantity_milli INTEGER NOT NULL,
+              taxable_minor INTEGER NOT NULL,
+              cgst_minor INTEGER NOT NULL,
+              sgst_minor INTEGER NOT NULL,
+              igst_minor INTEGER NOT NULL,
+              tax_minor INTEGER NOT NULL,
+              total_minor INTEGER NOT NULL
+            )
+          ''');
+          await db.execute('''
+            CREATE TABLE refund (
+              id TEXT PRIMARY KEY,
+              sale_return_id TEXT NOT NULL REFERENCES sale_return(id),
+              shift_id TEXT REFERENCES shift(id),
+              method TEXT NOT NULL,
+              amount_minor INTEGER NOT NULL,
+              status TEXT NOT NULL,
+              created_at TEXT NOT NULL,
+              idempotency_key TEXT NOT NULL UNIQUE
+            )
+          ''');
+          await db.execute('''
             CREATE TABLE stock_movement (
               id TEXT PRIMARY KEY,
               product_id TEXT NOT NULL REFERENCES product(id),
@@ -625,6 +691,77 @@ class LocalPosDatabase {
               WHERE singleton_id = 1
             ''');
           }
+          if (oldVersion < 7) {
+            await db.execute('''
+              CREATE TABLE held_sale (
+                id TEXT PRIMARY KEY,
+                customer_id TEXT REFERENCES customer(id),
+                held_at TEXT NOT NULL
+              )
+            ''');
+            await db.execute('''
+              CREATE TABLE held_sale_line (
+                id TEXT PRIMARY KEY,
+                held_sale_id TEXT NOT NULL REFERENCES held_sale(id) ON DELETE CASCADE,
+                product_id TEXT NOT NULL REFERENCES product(id),
+                product_name_snapshot TEXT NOT NULL,
+                quantity_milli INTEGER NOT NULL,
+                unit_price_minor INTEGER NOT NULL,
+                discount_minor INTEGER NOT NULL DEFAULT 0,
+                tax_rate_bps INTEGER NOT NULL,
+                tax_price_mode TEXT NOT NULL
+              )
+            ''');
+            await db.execute('''
+              CREATE TABLE return_sequence (
+                terminal_code TEXT PRIMARY KEY,
+                next_return INTEGER NOT NULL
+              )
+            ''');
+            await db.execute('''
+              INSERT OR IGNORE INTO return_sequence (terminal_code, next_return)
+              SELECT terminal_code, 1 FROM local_context WHERE singleton_id = 1
+            ''');
+            await db.execute('''
+              CREATE TABLE sale_return (
+                id TEXT PRIMARY KEY,
+                sale_id TEXT NOT NULL REFERENCES sale(id),
+                return_number TEXT NOT NULL UNIQUE,
+                reason TEXT NOT NULL,
+                total_refund_minor INTEGER NOT NULL,
+                status TEXT NOT NULL,
+                returned_at TEXT NOT NULL,
+                idempotency_key TEXT NOT NULL UNIQUE
+              )
+            ''');
+            await db.execute('''
+              CREATE TABLE sale_return_line (
+                id TEXT PRIMARY KEY,
+                sale_return_id TEXT NOT NULL REFERENCES sale_return(id),
+                sale_line_id TEXT NOT NULL REFERENCES sale_line(id),
+                product_id TEXT NOT NULL REFERENCES product(id),
+                quantity_milli INTEGER NOT NULL,
+                taxable_minor INTEGER NOT NULL,
+                cgst_minor INTEGER NOT NULL,
+                sgst_minor INTEGER NOT NULL,
+                igst_minor INTEGER NOT NULL,
+                tax_minor INTEGER NOT NULL,
+                total_minor INTEGER NOT NULL
+              )
+            ''');
+            await db.execute('''
+              CREATE TABLE refund (
+                id TEXT PRIMARY KEY,
+                sale_return_id TEXT NOT NULL REFERENCES sale_return(id),
+                shift_id TEXT REFERENCES shift(id),
+                method TEXT NOT NULL,
+                amount_minor INTEGER NOT NULL,
+                status TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                idempotency_key TEXT NOT NULL UNIQUE
+              )
+            ''');
+          }
         },
       ),
     );
@@ -698,6 +835,10 @@ class LocalPosDatabase {
       await txn.insert('terminal_sequence', {
         'terminal_code': context.terminalCode,
         'next_invoice': 1,
+      });
+      await txn.insert('return_sequence', {
+        'terminal_code': context.terminalCode,
+        'next_return': 1,
       });
       await txn.insert('employee', {
         'id': context.userId,
