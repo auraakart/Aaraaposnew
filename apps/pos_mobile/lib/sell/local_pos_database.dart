@@ -1106,19 +1106,46 @@ class LocalPosDatabase {
     );
   }
 
-  Future<void> updateLoyaltyProgram(LoyaltyProgram program) async {
+  Future<void> updateLoyaltyProgram({
+    required LocalSaleContext context,
+    required LoyaltyProgram program,
+  }) async {
     validateLoyaltyProgram(program);
-    await _database.update(
-      'loyalty_program',
-      {
-        'enabled': program.enabled ? 1 : 0,
-        'points_per_100_rupees': program.pointsPer100Rupees,
-        'redemption_minor_per_point': program.redemptionMinorPerPoint,
-        'max_redemption_bps': program.maxRedemptionBps,
-        'updated_at': DateTime.now().toUtc().toIso8601String(),
-      },
-      where: 'singleton_id = 1',
-    );
+    final now = DateTime.now().toUtc();
+    final idempotencyKey = _uuid.v4();
+    await _database.transaction((txn) async {
+      await txn.update(
+        'loyalty_program',
+        {
+          'enabled': program.enabled ? 1 : 0,
+          'points_per_100_rupees': program.pointsPer100Rupees,
+          'redemption_minor_per_point': program.redemptionMinorPerPoint,
+          'max_redemption_bps': program.maxRedemptionBps,
+          'updated_at': now.toIso8601String(),
+        },
+        where: 'singleton_id = 1',
+      );
+      await txn.insert('sync_outbox', {
+        'id': _uuid.v4(),
+        'entity_type': 'loyalty_program',
+        'entity_id': context.businessId,
+        'organization_id': context.organizationId,
+        'business_id': context.businessId,
+        'store_id': context.storeId,
+        'terminal_id': context.terminalId,
+        'idempotency_key': idempotencyKey,
+        'payload_json': jsonEncode({
+          'businessId': context.businessId,
+          'enabled': program.enabled,
+          'pointsPer100Rupees': program.pointsPer100Rupees,
+          'redemptionMinorPerPoint': program.redemptionMinorPerPoint,
+          'maxRedemptionBps': program.maxRedemptionBps,
+          'updatedAt': now.toIso8601String(),
+        }),
+        'state': 'pending',
+        'created_at': now.toIso8601String(),
+      });
+    });
   }
 
   Future<int> customerLoyaltyBalance(String customerId) async {
@@ -1142,6 +1169,7 @@ class LocalPosDatabase {
   }
 
   Future<LocalPromotion> addPromotion({
+    required LocalSaleContext context,
     required String name,
     required String type,
     required int value,
@@ -1162,6 +1190,7 @@ class LocalPosDatabase {
       throw ArgumentError('Invalid promotion');
     }
     final id = _uuid.v4();
+    final idempotencyKey = _uuid.v4();
     await _database.transaction((txn) async {
       await txn.insert('promotion', {
         'id': id,
@@ -1180,6 +1209,30 @@ class LocalPosDatabase {
           'product_id': productId,
         });
       }
+      await txn.insert('sync_outbox', {
+        'id': _uuid.v4(),
+        'entity_type': 'promotion',
+        'entity_id': id,
+        'organization_id': context.organizationId,
+        'business_id': context.businessId,
+        'store_id': context.storeId,
+        'terminal_id': context.terminalId,
+        'idempotency_key': idempotencyKey,
+        'payload_json': jsonEncode({
+          'promotionId': id,
+          'name': trimmed,
+          'type': type,
+          'value': value,
+          'minBasketMinor': minBasketMinor,
+          'maxDiscountMinor': maxDiscountMinor,
+          'startsAt': startsAt.toUtc().toIso8601String(),
+          'endsAt': endsAt.toUtc().toIso8601String(),
+          'productIds': productIds.toSet().toList(),
+          'active': true,
+        }),
+        'state': 'pending',
+        'created_at': DateTime.now().toUtc().toIso8601String(),
+      });
     });
     return LocalPromotion(
       id: id,
@@ -1230,13 +1283,38 @@ class LocalPosDatabase {
     return result;
   }
 
-  Future<void> setPromotionActive(String promotionId, bool active) async {
-    await _database.update(
-      'promotion',
-      {'active': active ? 1 : 0},
-      where: 'id = ?',
-      whereArgs: [promotionId],
-    );
+  Future<void> setPromotionActive({
+    required LocalSaleContext context,
+    required String promotionId,
+    required bool active,
+  }) async {
+    final now = DateTime.now().toUtc();
+    final idempotencyKey = _uuid.v4();
+    await _database.transaction((txn) async {
+      await txn.update(
+        'promotion',
+        {'active': active ? 1 : 0},
+        where: 'id = ?',
+        whereArgs: [promotionId],
+      );
+      await txn.insert('sync_outbox', {
+        'id': _uuid.v4(),
+        'entity_type': 'promotion',
+        'entity_id': promotionId,
+        'organization_id': context.organizationId,
+        'business_id': context.businessId,
+        'store_id': context.storeId,
+        'terminal_id': context.terminalId,
+        'idempotency_key': idempotencyKey,
+        'payload_json': jsonEncode({
+          'promotionId': promotionId,
+          'active': active,
+          'updatedAt': now.toIso8601String(),
+        }),
+        'state': 'pending',
+        'created_at': now.toIso8601String(),
+      });
+    });
   }
 
   Future<PromotionEvaluation?> bestPromotionForLines(
@@ -3901,6 +3979,55 @@ class LocalPosDatabase {
         });
       }
 
+      final loyaltyRows = await txn.query(
+        'sale_loyalty',
+        where: 'sale_id = ?',
+        whereArgs: [saleId],
+        limit: 1,
+      );
+      if (loyaltyRows.isNotEmpty) {
+        final pointsEarned = loyaltyRows.single['points_earned']! as int;
+        final customerId = loyaltyRows.single['customer_id']! as String;
+        if (pointsEarned > 0) {
+          final refundRows = await txn.rawQuery(
+            '''
+            SELECT COALESCE(SUM(total_refund_minor), 0) AS total
+            FROM sale_return
+            WHERE sale_id = ? AND status = 'finalized'
+            ''',
+            [saleId],
+          );
+          final cumulativeRefund = refundRows.single['total']! as int;
+          final saleTotal = sale['total_minor']! as int;
+          final targetReversal = saleTotal <= 0
+              ? pointsEarned
+              : (pointsEarned * cumulativeRefund + saleTotal ~/ 2) ~/
+                  saleTotal;
+          final reversedRows = await txn.rawQuery(
+            '''
+            SELECT COALESCE(SUM(points), 0) AS points
+            FROM customer_loyalty_entry
+            WHERE sale_id = ? AND entry_type = 'adjustment_out'
+            ''',
+            [saleId],
+          );
+          final alreadyReversed = reversedRows.single['points']! as int;
+          final pointsToReverse = targetReversal - alreadyReversed;
+          if (pointsToReverse > 0) {
+            await txn.insert('customer_loyalty_entry', {
+              'id': _uuid.v4(),
+              'customer_id': customerId,
+              'entry_type': 'adjustment_out',
+              'points': pointsToReverse,
+              'sale_id': saleId,
+              'note': 'Points reversed on $returnNumber',
+              'occurred_at': now.toIso8601String(),
+              'idempotency_key': 'loyalty-return:$returnId',
+            });
+          }
+        }
+      }
+
       await txn.insert('sync_outbox', {
         'id': _uuid.v4(),
         'entity_type': 'sale_return',
@@ -4327,7 +4454,7 @@ class LocalPosDatabase {
         });
       }
 
-      if (customerId != null) {
+      if (customerId != null && !isCredit) {
         final programRows = await txn.query(
           'loyalty_program',
           where: 'singleton_id = 1',
@@ -4426,6 +4553,9 @@ class LocalPosDatabase {
                   'quantityMilli': line.quantityMilli,
                   'unitPriceMinor': line.product.unitPriceMinor,
                   'discountMinor': line.discountMinor,
+                  'discountSource': line.discountSource ??
+                      (line.discountMinor > 0 ? 'manual' : null),
+                  'discountReferenceId': line.discountReferenceId,
                   'taxMinor': line.taxMinor,
                   'totalMinor': line.totalMinor,
                 },
