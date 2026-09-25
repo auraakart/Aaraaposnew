@@ -1,5 +1,11 @@
 # Release Notes
 
+## V1.6 Owner Intelligence — validation
+
+Home now provides period-based sales, bills, receipts, customer dues, expenses, guarded estimated profit, low-stock/cash exceptions, a business timeline and actionable data-quality checks.
+
+Estimated profit is intentionally withheld when recorded purchase-cost coverage is incomplete.
+
 ## V1.5 Store Operations — validation
 
 Added employee roster/roles, shift opening/closing, drawer deposits/withdrawals, expenses, sale-to-shift association, deterministic cash reconciliation, variance recording and approval-request foundation.
@@ -56,6 +62,7 @@ Not claimed:
 - tax filing gateways or regulatory certification
 - physical hardware certification
 - production credentials, hosting or deployment
+
 
 
 
