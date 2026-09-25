@@ -1,5 +1,11 @@
 # Release Notes
 
+## V1.2 Inventory — validation
+
+Added append-only stock movements, database-enforced movement direction, automatic sale stock reduction, atomic stock counts, low-stock thresholds, negative-stock anomaly visibility, offline receive/count/damage/loss workflows, Stock navigation UI, tenant-safe server aggregation and inventory regression tests.
+
+Not claimed in V1.2: supplier ordering, inter-store transfer UI, production-authenticated inventory sync, camera count/scanning certification or AI purchase forecasting.
+
 ## V1.1 Payments — validation
 
 Added UPI/Card adapter contracts, provider availability coordination, deterministic split-payment validation, payment finalization rules, reconciliation matching, server and local payment-event ledgers, payment status/provider evidence fields and an explicit payment-method chooser.
@@ -30,4 +36,5 @@ Not claimed:
 - tax filing gateways or regulatory certification
 - physical hardware certification
 - production credentials, hosting or deployment
+
 
