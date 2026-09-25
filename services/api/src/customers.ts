@@ -42,7 +42,10 @@ export function creditBalanceMinor(
   entries: readonly CustomerCreditEntry[]
 ): number {
   let balance = 0;
-  for (const entry of entries) {
+  const ordered = [...entries].sort((a, b) =>
+    a.occurredAt.localeCompare(b.occurredAt)
+  );
+  for (const entry of ordered) {
     validateCreditEntry(entry);
     balance += isIncrease(entry.type) ? entry.amountMinor : -entry.amountMinor;
     if (balance < 0) {
