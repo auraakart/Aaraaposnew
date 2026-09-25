@@ -1,0 +1,47 @@
+import 'package:flutter/material.dart';
+
+import '../purchases/purchases_screen.dart';
+import '../sell/local_pos_database.dart';
+
+class MoreScreen extends StatelessWidget {
+  const MoreScreen({
+    required this.database,
+    required this.saleContext,
+    super.key,
+  });
+
+  final LocalPosDatabase database;
+  final LocalSaleContext saleContext;
+
+  @override
+  Widget build(BuildContext context) {
+    return ListView(
+      padding: const EdgeInsets.all(16),
+      children: [
+        Card(
+          child: ListTile(
+            leading: const Icon(Icons.local_shipping_outlined),
+            title: const Text('Purchases & Suppliers'),
+            subtitle: const Text(
+              'Create orders, receive stock, returns and supplier payments',
+            ),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () {
+              Navigator.of(context).push(
+                MaterialPageRoute<void>(
+                  builder: (_) => Scaffold(
+                    appBar: AppBar(title: const Text('Purchases & Suppliers')),
+                    body: PurchasesScreen(
+                      database: database,
+                      saleContext: saleContext,
+                    ),
+                  ),
+                ),
+              );
+            },
+          ),
+        ),
+      ],
+    );
+  }
+}
