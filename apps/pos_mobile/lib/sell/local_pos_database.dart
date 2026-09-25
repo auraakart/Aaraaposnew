@@ -457,6 +457,187 @@ class LocalPosDatabase {
     return product;
   }
 
+  Future<LocalCustomer> addCustomer({
+    required String name,
+    String? mobile,
+    CommunicationConsent consent = CommunicationConsent.unknown,
+  }) async {
+    final trimmedName = name.trim();
+    final trimmedMobile = mobile?.trim();
+    if (trimmedName.isEmpty) {
+      throw ArgumentError('Customer name is required');
+    }
+    final now = DateTime.now().toUtc();
+    final id = _uuid.v4();
+    await _database.insert('customer', {
+      'id': id,
+      'name': trimmedName,
+      'mobile_e164':
+          trimmedMobile == null || trimmedMobile.isEmpty ? null : trimmedMobile,
+      'communication_consent': communicationConsentValue(consent),
+      'created_at': now.toIso8601String(),
+      'updated_at': now.toIso8601String(),
+    });
+    return LocalCustomer(
+      id: id,
+      name: trimmedName,
+      mobile: trimmedMobile == null || trimmedMobile.isEmpty
+          ? null
+          : trimmedMobile,
+      creditBalanceMinor: 0,
+      overdueMinor: 0,
+      consent: consent,
+    );
+  }
+
+  Future<List<CreditEntry>> customerCreditEntries(String customerId) async {
+    final rows = await _database.query(
+      'customer_credit_entry',
+      where: 'customer_id = ?',
+      whereArgs: [customerId],
+      orderBy: 'occurred_at, id',
+    );
+    return rows
+        .map(
+          (row) => CreditEntry(
+            id: row['id']! as String,
+            customerId: row['customer_id']! as String,
+            type: creditEntryTypeFromValue(row['entry_type']! as String),
+            amountMinor: row['amount_minor']! as int,
+            occurredAt: DateTime.parse(row['occurred_at']! as String),
+            dueDate: row['due_date'] == null
+                ? null
+                : DateTime.parse(row['due_date']! as String),
+            saleId: row['sale_id'] as String?,
+          ),
+        )
+        .toList();
+  }
+
+  Future<List<LocalCustomer>> listCustomers({String query = ''}) async {
+    final trimmed = query.trim();
+    final rows = trimmed.isEmpty
+        ? await _database.query('customer', orderBy: 'name COLLATE NOCASE')
+        : await _database.query(
+            'customer',
+            where: 'name LIKE ? OR mobile_e164 LIKE ?',
+            whereArgs: ['%$trimmed%', '%$trimmed%'],
+            orderBy: 'name COLLATE NOCASE',
+          );
+
+    final result = <LocalCustomer>[];
+    for (final row in rows) {
+      final customerId = row['id']! as String;
+      final entries = await customerCreditEntries(customerId);
+      final summary = summarizeCredit(
+        entries,
+        asOf: DateTime.now().toUtc(),
+      );
+      final saleRows = await _database.rawQuery(
+        'SELECT MAX(local_created_at) AS last_purchase FROM sale WHERE customer_id = ?',
+        [customerId],
+      );
+      final lastPurchaseText = saleRows.single['last_purchase'] as String?;
+      result.add(
+        LocalCustomer(
+          id: customerId,
+          name: row['name']! as String,
+          mobile: row['mobile_e164'] as String?,
+          creditBalanceMinor: summary.balanceMinor,
+          overdueMinor: summary.overdueMinor,
+          lastPurchaseAt:
+              lastPurchaseText == null ? null : DateTime.parse(lastPurchaseText),
+          consent: communicationConsentFromValue(
+            row['communication_consent']! as String,
+          ),
+        ),
+      );
+    }
+    return result;
+  }
+
+  Future<void> collectCustomerCredit({
+    required LocalSaleContext context,
+    required String customerId,
+    required int amountMinor,
+    String collectionMethod = 'cash',
+    String? note,
+  }) {
+    if (amountMinor <= 0) {
+      throw ArgumentError('Collection amount must be positive');
+    }
+    if (!{'cash', 'upi', 'card'}.contains(collectionMethod)) {
+      throw ArgumentError('Unsupported collection method');
+    }
+
+    return _database.transaction((txn) async {
+      final balanceRows = await txn.rawQuery(
+        '''
+        SELECT COALESCE(
+          SUM(
+            CASE
+              WHEN entry_type IN ('charge', 'correction_increase')
+                THEN amount_minor
+              ELSE -amount_minor
+            END
+          ),
+          0
+        ) AS balance_minor
+        FROM customer_credit_entry
+        WHERE customer_id = ?
+        ''',
+        [customerId],
+      );
+      final balance = balanceRows.single['balance_minor']! as int;
+      if (amountMinor > balance) {
+        throw StateError('Collection cannot exceed customer credit balance');
+      }
+
+      final entryId = _uuid.v4();
+      final idempotencyKey = _uuid.v4();
+      final now = DateTime.now().toUtc();
+      await txn.insert('customer_credit_entry', {
+        'id': entryId,
+        'customer_id': customerId,
+        'entry_type': 'payment',
+        'amount_minor': amountMinor,
+        'collection_method': collectionMethod,
+        'note': note?.trim(),
+        'occurred_at': now.toIso8601String(),
+        'idempotency_key': idempotencyKey,
+      });
+      await txn.insert('sync_outbox', {
+        'id': _uuid.v4(),
+        'entity_type': 'customer_credit_entry',
+        'entity_id': entryId,
+        'organization_id': context.organizationId,
+        'business_id': context.businessId,
+        'store_id': context.storeId,
+        'terminal_id': context.terminalId,
+        'idempotency_key': idempotencyKey,
+        'payload_json': jsonEncode({
+          'entryId': entryId,
+          'customerId': customerId,
+          'entryType': 'payment',
+          'amountMinor': amountMinor,
+          'collectionMethod': collectionMethod,
+          'note': note?.trim(),
+          'occurredAt': now.toIso8601String(),
+        }),
+        'state': 'pending',
+        'created_at': now.toIso8601String(),
+      });
+    });
+  }
+
+  Future<int> customerCreditEntryCount(String customerId) async {
+    final rows = await _database.rawQuery(
+      'SELECT COUNT(*) AS count FROM customer_credit_entry WHERE customer_id = ?',
+      [customerId],
+    );
+    return (rows.single['count'] as int?) ?? 0;
+  }
+
   Future<int> pendingOutboxCount() async {
     final rows = await _database.rawQuery(
       "SELECT COUNT(*) AS count FROM sync_outbox WHERE state = 'pending'",
