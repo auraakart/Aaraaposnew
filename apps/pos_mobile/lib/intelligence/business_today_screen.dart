@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../ai/business_assistant_screen.dart';
 import '../sell/local_pos_database.dart';
 import '../sell/sale_domain.dart';
 import 'owner_intelligence.dart';
@@ -72,6 +73,26 @@ class _BusinessTodayScreenState extends State<BusinessTodayScreen> {
               ],
               selected: {period},
               onSelectionChanged: (values) => selectPeriod(values.first),
+            ),
+          ),
+          const SizedBox(height: 16),
+          Card(
+            child: ListTile(
+              leading: const Icon(Icons.auto_awesome_outlined),
+              title: const Text('Ask AaraaPOS'),
+              subtitle: const Text(
+                'Ask about sales, stock, customer credit, expenses or what to order',
+              ),
+              trailing: const Icon(Icons.chevron_right),
+              onTap: () {
+                Navigator.of(context).push(
+                  MaterialPageRoute<void>(
+                    builder: (_) => BusinessAssistantScreen(
+                      database: widget.database,
+                    ),
+                  ),
+                );
+              },
             ),
           ),
           const SizedBox(height: 16),

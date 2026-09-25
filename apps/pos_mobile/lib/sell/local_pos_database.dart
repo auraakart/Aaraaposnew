@@ -4,6 +4,7 @@ import 'package:path/path.dart' as p;
 import 'package:sqflite/sqflite.dart';
 import 'package:uuid/uuid.dart';
 
+import '../ai/ai_domain.dart';
 import '../customers/customer_domain.dart';
 import '../intelligence/owner_intelligence.dart';
 import '../inventory/inventory_domain.dart';
@@ -2378,6 +2379,431 @@ class LocalPosDatabase {
     }
 
     return issues;
+  }
+
+  Future<AssistantAnswer> assistantAnswer(String question) async {
+    final normalized = question.trim().toLowerCase();
+    if (normalized.isEmpty) {
+      return const AssistantAnswer(
+        question: '',
+        classification: InsightClassification.fact,
+        answer: 'Ask about sales, low stock, customer credit, expenses, or cash.',
+        evidence: [
+          InsightEvidence(sourceType: 'assistant_capability', value: 'local')
+        ],
+      );
+    }
+
+    if (normalized.contains('sale') ||
+        normalized.contains('sell') ||
+        normalized.contains('sold')) {
+      final metrics = await businessMetrics(ReportPeriod.today);
+      return AssistantAnswer(
+        question: question,
+        classification: InsightClassification.fact,
+        answer:
+            'Today\'s sales are ${formatInr(metrics.salesMinor)} from ${metrics.billCount} bill${metrics.billCount == 1 ? '' : 's'}.',
+        evidence: [
+          InsightEvidence(
+            sourceType: 'sale',
+            metric: 'today_sales_minor',
+            value: metrics.salesMinor,
+            window: 'today',
+          ),
+          InsightEvidence(
+            sourceType: 'sale',
+            metric: 'bill_count',
+            value: metrics.billCount,
+            window: 'today',
+          ),
+        ],
+      );
+    }
+
+    if (normalized.contains('low stock') ||
+        normalized.contains('running out') ||
+        normalized.contains('stock')) {
+      final inventory = await listInventory();
+      final needsAttention = inventory
+          .where((item) => item.health != StockHealth.healthy)
+          .toList();
+      final names = needsAttention.take(5).map((item) => item.name).join(', ');
+      return AssistantAnswer(
+        question: question,
+        classification: InsightClassification.fact,
+        answer: needsAttention.isEmpty
+            ? 'No stock item currently needs attention.'
+            : '${needsAttention.length} item${needsAttention.length == 1 ? '' : 's'} need attention: $names.',
+        evidence: needsAttention.isEmpty
+            ? const [
+                InsightEvidence(
+                  sourceType: 'stock_movement',
+                  metric: 'items_needing_attention',
+                  value: 0,
+                ),
+              ]
+            : [
+                for (final item in needsAttention.take(10))
+                  InsightEvidence(
+                    sourceType: 'stock_movement',
+                    sourceId: item.productId,
+                    metric: 'on_hand_milli',
+                    value: item.onHandMilli,
+                  ),
+              ],
+      );
+    }
+
+    if (normalized.contains('owe') ||
+        normalized.contains('credit') ||
+        normalized.contains('due')) {
+      final customers = await listCustomers();
+      LocalCustomer? matched;
+      for (final customer in customers) {
+        if (normalized.contains(customer.name.toLowerCase())) {
+          matched = customer;
+          break;
+        }
+      }
+      if (matched != null) {
+        return AssistantAnswer(
+          question: question,
+          classification: InsightClassification.fact,
+          answer:
+              '${matched.name} owes ${formatInr(matched.creditBalanceMinor)}. '
+              '${matched.overdueMinor > 0 ? '${formatInr(matched.overdueMinor)} is overdue.' : 'Nothing is overdue.'}',
+          evidence: [
+            InsightEvidence(
+              sourceType: 'customer_credit_entry',
+              sourceId: matched.id,
+              metric: 'balance_minor',
+              value: matched.creditBalanceMinor,
+            ),
+            InsightEvidence(
+              sourceType: 'customer_credit_entry',
+              sourceId: matched.id,
+              metric: 'overdue_minor',
+              value: matched.overdueMinor,
+            ),
+          ],
+        );
+      }
+
+      final metrics = await businessMetrics(ReportPeriod.today);
+      return AssistantAnswer(
+        question: question,
+        classification: InsightClassification.fact,
+        answer:
+            'Customers currently owe ${formatInr(metrics.moneyDueMinor)} in total.',
+        evidence: [
+          InsightEvidence(
+            sourceType: 'customer_credit_entry',
+            metric: 'total_due_minor',
+            value: metrics.moneyDueMinor,
+          ),
+        ],
+      );
+    }
+
+    if (normalized.contains('expense')) {
+      final metrics = await businessMetrics(ReportPeriod.today);
+      return AssistantAnswer(
+        question: question,
+        classification: InsightClassification.fact,
+        answer:
+            'Today\'s recorded expenses are ${formatInr(metrics.expensesMinor)}.',
+        evidence: [
+          InsightEvidence(
+            sourceType: 'expense',
+            metric: 'today_expense_minor',
+            value: metrics.expensesMinor,
+            window: 'today',
+          ),
+        ],
+      );
+    }
+
+    if (normalized.contains('cash') ||
+        normalized.contains('difference') ||
+        normalized.contains('variance')) {
+      final metrics = await businessMetrics(ReportPeriod.today);
+      final variance = metrics.latestCashVarianceMinor;
+      return AssistantAnswer(
+        question: question,
+        classification: InsightClassification.fact,
+        answer: variance == null
+            ? 'No closed-shift cash difference is recorded yet.'
+            : variance == 0
+                ? 'The latest closed shift matched expected cash.'
+                : 'The latest closed shift has a ${formatInr(variance.abs())} '
+                    '${variance < 0 ? 'shortage' : 'excess'}.',
+        evidence: [
+          InsightEvidence(
+            sourceType: 'shift',
+            metric: 'latest_variance_minor',
+            value: variance ?? 0,
+          ),
+        ],
+      );
+    }
+
+    if (normalized.contains('order') ||
+        normalized.contains('buy') ||
+        normalized.contains('purchase')) {
+      final insights = await generateBusinessInsights();
+      final suggestions = insights
+          .where((item) => item.type == 'purchase_suggestion')
+          .toList();
+      return AssistantAnswer(
+        question: question,
+        classification: InsightClassification.recommendation,
+        answer: suggestions.isEmpty
+            ? 'Recent sales do not currently support a purchase suggestion.'
+            : suggestions.take(3).map((item) => item.message).join(' '),
+        evidence: suggestions.isEmpty
+            ? const [
+                InsightEvidence(
+                  sourceType: 'sale_line',
+                  metric: 'purchase_suggestions',
+                  value: 0,
+                  window: 'last_14_days',
+                ),
+              ]
+            : [
+                for (final item in suggestions.take(3)) ...item.evidence,
+              ],
+      );
+    }
+
+    return const AssistantAnswer(
+      question: '',
+      classification: InsightClassification.fact,
+      answer:
+          'I can answer recorded questions about sales, stock, customer credit, expenses, cash differences and purchase suggestions.',
+      evidence: [
+        InsightEvidence(sourceType: 'assistant_capability', value: 'local')
+      ],
+    );
+  }
+
+  Future<List<LocalBusinessInsight>> generateBusinessInsights({
+    DateTime? now,
+  }) async {
+    final generatedAt = (now ?? DateTime.now()).toUtc();
+    final insights = <LocalBusinessInsight>[];
+    final metrics = await businessMetrics(ReportPeriod.today, now: now);
+
+    insights.add(
+      LocalBusinessInsight(
+        id: 'daily-summary-${generatedAt.toIso8601String()}',
+        type: 'daily_summary',
+        classification: InsightClassification.fact,
+        title: 'Business today',
+        message:
+            'Sales ${formatInr(metrics.salesMinor)} from ${metrics.billCount} bills; '
+            'expenses ${formatInr(metrics.expensesMinor)}.',
+        evidence: [
+          InsightEvidence(
+            sourceType: 'sale',
+            metric: 'sales_minor',
+            value: metrics.salesMinor,
+            window: 'today',
+          ),
+          InsightEvidence(
+            sourceType: 'expense',
+            metric: 'expenses_minor',
+            value: metrics.expensesMinor,
+            window: 'today',
+          ),
+        ],
+        generatedAt: generatedAt,
+      ),
+    );
+
+    if (metrics.previousComparableSalesMinor > 0) {
+      final delta = metrics.salesMinor - metrics.previousComparableSalesMinor;
+      final direction = delta.abs() * 10000 ~/
+          metrics.previousComparableSalesMinor;
+      if (direction >= 500) {
+        insights.add(
+          LocalBusinessInsight(
+            id: 'sales-comparison-${generatedAt.toIso8601String()}',
+            type: 'sales_comparison',
+            classification: InsightClassification.calculation,
+            title: delta < 0 ? 'Sales are lower' : 'Sales are higher',
+            message:
+                'Sales are ${formatInr(delta.abs())} ${delta < 0 ? 'lower' : 'higher'} '
+                'than the same period one week earlier.',
+            evidence: [
+              InsightEvidence(
+                sourceType: 'sale',
+                metric: 'current_sales_minor',
+                value: metrics.salesMinor,
+                window: 'today',
+              ),
+              InsightEvidence(
+                sourceType: 'sale',
+                metric: 'comparison_sales_minor',
+                value: metrics.previousComparableSalesMinor,
+                window: 'same_period_last_week',
+              ),
+            ],
+            generatedAt: generatedAt,
+          ),
+        );
+      }
+    }
+
+    final start = generatedAt.subtract(const Duration(days: 14)).toIso8601String();
+    final recommendationRows = await _database.rawQuery(
+      '''
+      SELECT
+        p.id,
+        p.name,
+        COALESCE((
+          SELECT SUM(sm.quantity_delta_milli)
+          FROM stock_movement sm
+          WHERE sm.product_id = p.id
+        ), 0) AS on_hand_milli,
+        COALESCE((
+          SELECT SUM(sl.quantity_milli)
+          FROM sale_line sl
+          INNER JOIN sale s ON s.id = sl.sale_id
+          WHERE sl.product_id = p.id
+            AND s.status = 'finalized'
+            AND s.local_created_at >= ?
+        ), 0) AS sold_milli
+      FROM product p
+      WHERE p.active = 1
+      ORDER BY p.name COLLATE NOCASE
+      ''',
+      [start],
+    );
+
+    for (final row in recommendationRows) {
+      final soldMilli = row['sold_milli']! as int;
+      if (soldMilli <= 0) continue;
+      final averageDailySoldMilli = (soldMilli / 14).ceil();
+      final onHandMilli = row['on_hand_milli']! as int;
+      final targetMilli = averageDailySoldMilli * 7;
+      final suggestedMilli =
+          targetMilli > onHandMilli ? targetMilli - onHandMilli : 0;
+      if (suggestedMilli <= 0) continue;
+
+      final daysCover = onHandMilli <= 0
+          ? 0
+          : onHandMilli ~/ averageDailySoldMilli;
+      insights.add(
+        LocalBusinessInsight(
+          id: 'purchase-${row['id']}-${generatedAt.toIso8601String()}',
+          type: 'purchase_suggestion',
+          classification: InsightClassification.recommendation,
+          title: 'Consider ordering ${row['name']}',
+          message:
+              '${row['name']} has about $daysCover day${daysCover == 1 ? '' : 's'} '
+              'of stock at the recent sales rate. Consider ordering '
+              '${_formatMilliQuantity(suggestedMilli)} units for about 7 days of coverage.',
+          evidence: [
+            InsightEvidence(
+              sourceType: 'stock_movement',
+              sourceId: row['id']! as String,
+              metric: 'on_hand_milli',
+              value: onHandMilli,
+            ),
+            InsightEvidence(
+              sourceType: 'sale_line',
+              sourceId: row['id']! as String,
+              metric: 'sold_milli',
+              value: soldMilli,
+              window: 'last_14_days',
+            ),
+            const InsightEvidence(
+              sourceType: 'calculation',
+              metric: 'target_coverage_days',
+              value: 7,
+            ),
+          ],
+          generatedAt: generatedAt,
+        ),
+      );
+    }
+
+    final winBackThreshold =
+        generatedAt.subtract(const Duration(days: 30)).toIso8601String();
+    final winBackRows = await _database.rawQuery(
+      '''
+      SELECT
+        c.id,
+        c.name,
+        COUNT(s.id) AS purchase_count,
+        MAX(s.local_created_at) AS last_purchase
+      FROM customer c
+      INNER JOIN sale s ON s.customer_id = c.id
+      WHERE s.status = 'finalized'
+      GROUP BY c.id, c.name
+      HAVING COUNT(s.id) >= 2
+        AND MAX(s.local_created_at) < ?
+      ORDER BY last_purchase
+      ''',
+      [winBackThreshold],
+    );
+    if (winBackRows.isNotEmpty) {
+      insights.add(
+        LocalBusinessInsight(
+          id: 'winback-${generatedAt.toIso8601String()}',
+          type: 'customer_winback',
+          classification: InsightClassification.recommendation,
+          title: 'Customers may be worth reconnecting with',
+          message:
+              '${winBackRows.length} previously repeat customer'
+              '${winBackRows.length == 1 ? '' : 's'} have not purchased in 30 days.',
+          evidence: [
+            for (final row in winBackRows.take(10))
+              InsightEvidence(
+                sourceType: 'sale',
+                sourceId: row['id']! as String,
+                metric: 'last_purchase',
+                value: row['last_purchase']! as String,
+                window: 'customer_history',
+              ),
+          ],
+          generatedAt: generatedAt,
+        ),
+      );
+    }
+
+    final variance = metrics.latestCashVarianceMinor;
+    if (variance != null && variance.abs() > 50000) {
+      insights.add(
+        LocalBusinessInsight(
+          id: 'cash-anomaly-${generatedAt.toIso8601String()}',
+          type: 'cash_anomaly',
+          classification: InsightClassification.calculation,
+          title: 'Cash difference needs attention',
+          message:
+              'The latest closed shift differs by ${formatInr(variance.abs())} '
+              'from expected cash.',
+          evidence: [
+            InsightEvidence(
+              sourceType: 'shift',
+              metric: 'variance_minor',
+              value: variance,
+            ),
+          ],
+          generatedAt: generatedAt,
+        ),
+      );
+    }
+
+    return insights;
+  }
+
+  String _formatMilliQuantity(int milli) {
+    final whole = milli ~/ 1000;
+    final fraction = (milli % 1000).toString().padLeft(3, '0');
+    if (fraction == '000') return '$whole';
+    final trimmed = fraction.replaceFirst(RegExp(r'0+$'), '');
+    return '$whole.$trimmed';
   }
 
   Future<int> pendingOutboxCount() async {
