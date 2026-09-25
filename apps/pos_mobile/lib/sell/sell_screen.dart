@@ -464,7 +464,7 @@ class _SellScreenState extends State<SellScreen> {
         discountReferences[entry.key] = customer.id;
         allocated += share;
       }
-      appliedPromotionName = '${redemption.points} points';
+      appliedPromotionName = null;
     });
   }
 
