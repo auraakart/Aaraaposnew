@@ -918,12 +918,19 @@ class LocalPosDatabase {
       final entryId = _uuid.v4();
       final idempotencyKey = _uuid.v4();
       final now = DateTime.now().toUtc();
+      final shiftId = collectionMethod == 'cash'
+          ? await _openShiftId(txn)
+          : null;
+      if (collectionMethod == 'cash' && shiftId == null) {
+        throw StateError('Open a shift before collecting cash credit');
+      }
       await txn.insert('customer_credit_entry', {
         'id': entryId,
         'customer_id': customerId,
         'entry_type': 'payment',
         'amount_minor': amountMinor,
         'collection_method': collectionMethod,
+        'shift_id': shiftId,
         'note': note?.trim(),
         'occurred_at': now.toIso8601String(),
         'idempotency_key': idempotencyKey,
@@ -943,6 +950,7 @@ class LocalPosDatabase {
           'entryType': 'payment',
           'amountMinor': amountMinor,
           'collectionMethod': collectionMethod,
+          'shiftId': shiftId,
           'note': note?.trim(),
           'occurredAt': now.toIso8601String(),
         }),
@@ -2249,6 +2257,7 @@ class LocalPosDatabase {
         whereArgs: [context.terminalCode],
       );
 
+      final shiftId = await _openShiftId(txn);
       await txn.insert('sale', {
         'id': saleId,
         'organization_id': context.organizationId,
@@ -2257,6 +2266,7 @@ class LocalPosDatabase {
         'terminal_id': context.terminalId,
         'cashier_user_id': context.userId,
         'customer_id': customerId,
+        'shift_id': shiftId,
         'invoice_number': invoiceNumber,
         'local_created_at': now.toIso8601String(),
         'subtotal_minor': totals.subtotalMinor,
