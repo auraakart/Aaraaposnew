@@ -152,3 +152,21 @@ CommunicationConsent communicationConsentFromValue(String value) {
     _ => CommunicationConsent.unknown,
   };
 }
+
+String creditEntryTypeValue(CreditEntryType type) {
+  return switch (type) {
+    CreditEntryType.charge => 'charge',
+    CreditEntryType.payment => 'payment',
+    CreditEntryType.correctionIncrease => 'correction_increase',
+    CreditEntryType.correctionDecrease => 'correction_decrease',
+  };
+}
+
+CreditEntryType creditEntryTypeFromValue(String value) {
+  return switch (value) {
+    'payment' => CreditEntryType.payment,
+    'correction_increase' => CreditEntryType.correctionIncrease,
+    'correction_decrease' => CreditEntryType.correctionDecrease,
+    _ => CreditEntryType.charge,
+  };
+}
