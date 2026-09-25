@@ -3560,29 +3560,6 @@ class LocalPosDatabase {
         });
       }
 
-      final remainingRows = await txn.rawQuery(
-        '''
-        SELECT COUNT(*) AS count
-        FROM sale_line sl
-        WHERE sl.sale_id = ?
-          AND sl.quantity_milli > COALESCE((
-            SELECT SUM(srl.quantity_milli)
-            FROM sale_return_line srl
-            INNER JOIN sale_return sr ON sr.id = srl.sale_return_id
-            WHERE srl.sale_line_id = sl.id AND sr.status = 'finalized'
-          ), 0)
-        ''',
-        [saleId],
-      );
-      if ((remainingRows.single['count']! as int) == 0) {
-        await txn.update(
-          'sale',
-          {'status': 'reversed'},
-          where: 'id = ?',
-          whereArgs: [saleId],
-        );
-      }
-
       await txn.insert('sync_outbox', {
         'id': _uuid.v4(),
         'entity_type': 'sale_return',
