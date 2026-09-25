@@ -73,11 +73,21 @@ export function supplierBalanceMinor(
   for (const entry of ordered) {
     assertPositiveInteger(entry.amountMinor, "supplier amount");
     balance += isIncrease(entry.type) ? entry.amountMinor : -entry.amountMinor;
-    if (balance < 0) {
-      throw new Error("Supplier balance cannot be over-paid");
-    }
   }
   return balance;
+}
+
+export function validateSupplierPayment(
+  balanceMinor: number,
+  paymentMinor: number
+): void {
+  if (!Number.isSafeInteger(balanceMinor) || balanceMinor <= 0) {
+    throw new Error("Supplier has no payable balance");
+  }
+  assertPositiveInteger(paymentMinor, "paymentMinor");
+  if (paymentMinor > balanceMinor) {
+    throw new Error("Supplier payment cannot exceed payable balance");
+  }
 }
 
 export function nextOrderStatus(input: {
