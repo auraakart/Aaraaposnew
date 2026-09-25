@@ -31,6 +31,8 @@ void main() {
     expect(find.text('UPI'), findsOneWidget);
     expect(find.text('Card'), findsOneWidget);
     expect(find.text('Customer Credit / Pay Later'), findsOneWidget);
+    await tester.drag(find.byType(ListView), const Offset(0, -240));
+    await tester.pumpAndSettle();
     expect(find.text('Split payment'), findsOneWidget);
     expect(
       find.text('Connect a payment provider to enable UPI.'),
@@ -69,6 +71,11 @@ void main() {
 
     await tester.tap(find.text('Pay'));
     await tester.pumpAndSettle();
+    await tester.scrollUntilVisible(
+      find.text('Customer Credit / Pay Later'),
+      120,
+      scrollable: find.byType(Scrollable).last,
+    );
     await tester.tap(find.text('Customer Credit / Pay Later'));
     await tester.pumpAndSettle();
 
