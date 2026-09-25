@@ -3,7 +3,8 @@ import assert from "node:assert/strict";
 import {
   nextOrderStatus,
   purchaseTotalMinor,
-  supplierBalanceMinor
+  supplierBalanceMinor,
+  validateSupplierPayment
 } from "../src/purchases.js";
 
 test("purchase totals use milli-units and integer money", () => {
@@ -49,18 +50,24 @@ test("supplier balance derives from charges returns and payments", () => {
   );
 });
 
-test("supplier over-payment is rejected", () => {
-  assert.throws(() =>
+test("supplier return may create a supplier credit", () => {
+  assert.equal(
     supplierBalanceMinor([
       {
-        id: "payment",
+        id: "return",
         supplierId: "s1",
-        type: "payment",
+        type: "purchase_return_credit",
         amountMinor: 100,
         occurredAt: "2026-09-01T10:00:00Z"
       }
-    ])
+    ]),
+    -100
   );
+});
+
+test("supplier payment cannot exceed payable balance", () => {
+  assert.throws(() => validateSupplierPayment(5000, 6000));
+  assert.doesNotThrow(() => validateSupplierPayment(5000, 5000));
 });
 
 test("purchase order state tracks partial and full receipt", () => {
