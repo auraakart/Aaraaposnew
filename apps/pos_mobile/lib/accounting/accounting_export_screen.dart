@@ -123,14 +123,34 @@ class _AccountingExportScreenState extends State<AccountingExportScreen> {
                       style: Theme.of(context).textTheme.titleMedium,
                     ),
                     const SizedBox(height: 8),
-                    _Line('Taxable', formatInr(summary.taxableMinor)),
-                    _Line('CGST', formatInr(summary.cgstMinor)),
-                    _Line('SGST', formatInr(summary.sgstMinor)),
-                    _Line('IGST', formatInr(summary.igstMinor)),
-                    if (summary.unclassifiedTaxMinor > 0) ...[
+                    _Line(
+                      'Sales taxable',
+                      formatInr(summary.salesTaxableMinor),
+                    ),
+                    _Line(
+                      'Sales CGST after returns',
+                      formatInr(summary.outputCgstAfterReturnsMinor),
+                    ),
+                    _Line(
+                      'Sales SGST after returns',
+                      formatInr(summary.outputSgstAfterReturnsMinor),
+                    ),
+                    _Line(
+                      'Sales IGST after returns',
+                      formatInr(summary.outputIgstAfterReturnsMinor),
+                    ),
+                    _Line(
+                      'Returns taxable',
+                      formatInr(summary.returnsTaxableMinor),
+                    ),
+                    _Line(
+                      'Purchase taxable',
+                      formatInr(summary.purchaseTaxableMinor),
+                    ),
+                    if (summary.purchaseUnclassifiedTaxMinor > 0) ...[
                       _Line(
                         'Purchase tax not split',
-                        formatInr(summary.unclassifiedTaxMinor),
+                        formatInr(summary.purchaseUnclassifiedTaxMinor),
                       ),
                       const SizedBox(height: 8),
                       const Text(
