@@ -1510,6 +1510,475 @@ class LocalPosDatabase {
         .toList();
   }
 
+  Future<String?> _openShiftId(DatabaseExecutor executor) async {
+    final rows = await executor.query(
+      'shift',
+      columns: ['id'],
+      where: "status = 'open'",
+      orderBy: 'opened_at DESC',
+      limit: 1,
+    );
+    return rows.isEmpty ? null : rows.single['id']! as String;
+  }
+
+  Future<LocalEmployee> addEmployee({
+    required LocalSaleContext context,
+    required String name,
+    required EmployeeRole role,
+    String? mobile,
+  }) async {
+    final trimmed = name.trim();
+    if (trimmed.isEmpty) {
+      throw ArgumentError('Employee name is required');
+    }
+    final employee = LocalEmployee(
+      id: _uuid.v4(),
+      name: trimmed,
+      mobile: mobile?.trim().isEmpty ?? true ? null : mobile!.trim(),
+      role: role,
+      active: true,
+    );
+    final now = DateTime.now().toUtc();
+    final idempotencyKey = _uuid.v4();
+    await _database.transaction((txn) async {
+      await txn.insert('employee', {
+        'id': employee.id,
+        'name': employee.name,
+        'mobile_e164': employee.mobile,
+        'role': employeeRoleValue(employee.role),
+        'active': 1,
+        'created_at': now.toIso8601String(),
+      });
+      await txn.insert('sync_outbox', {
+        'id': _uuid.v4(),
+        'entity_type': 'employee',
+        'entity_id': employee.id,
+        'organization_id': context.organizationId,
+        'business_id': context.businessId,
+        'store_id': context.storeId,
+        'terminal_id': context.terminalId,
+        'idempotency_key': idempotencyKey,
+        'payload_json': jsonEncode({
+          'employeeId': employee.id,
+          'name': employee.name,
+          'mobile': employee.mobile,
+          'role': employeeRoleValue(employee.role),
+          'active': true,
+          'createdAt': now.toIso8601String(),
+        }),
+        'state': 'pending',
+        'created_at': now.toIso8601String(),
+      });
+    });
+    return employee;
+  }
+
+  Future<List<LocalEmployee>> listEmployees() async {
+    final rows = await _database.query(
+      'employee',
+      orderBy: 'name COLLATE NOCASE',
+    );
+    return rows
+        .map(
+          (row) => LocalEmployee(
+            id: row['id']! as String,
+            name: row['name']! as String,
+            mobile: row['mobile_e164'] as String?,
+            role: employeeRoleFromValue(row['role']! as String),
+            active: (row['active']! as int) == 1,
+          ),
+        )
+        .toList();
+  }
+
+  Future<LocalShift> openShift({
+    required LocalSaleContext context,
+    required String employeeId,
+    required int openingCashMinor,
+  }) async {
+    if (openingCashMinor < 0) {
+      throw ArgumentError('Opening cash cannot be negative');
+    }
+    final shiftId = _uuid.v4();
+    final now = DateTime.now().toUtc();
+    final idempotencyKey = _uuid.v4();
+    late String employeeName;
+
+    await _database.transaction((txn) async {
+      if (await _openShiftId(txn) != null) {
+        throw StateError('A shift is already open');
+      }
+      final employees = await txn.query(
+        'employee',
+        where: 'id = ? AND active = 1',
+        whereArgs: [employeeId],
+        limit: 1,
+      );
+      if (employees.isEmpty) {
+        throw StateError('Active employee not found');
+      }
+      employeeName = employees.single['name']! as String;
+
+      await txn.insert('shift', {
+        'id': shiftId,
+        'employee_id': employeeId,
+        'opened_at': now.toIso8601String(),
+        'opening_cash_minor': openingCashMinor,
+        'status': 'open',
+      });
+      await txn.insert('sync_outbox', {
+        'id': _uuid.v4(),
+        'entity_type': 'shift',
+        'entity_id': shiftId,
+        'organization_id': context.organizationId,
+        'business_id': context.businessId,
+        'store_id': context.storeId,
+        'terminal_id': context.terminalId,
+        'idempotency_key': idempotencyKey,
+        'payload_json': jsonEncode({
+          'shiftId': shiftId,
+          'employeeId': employeeId,
+          'event': 'opened',
+          'openingCashMinor': openingCashMinor,
+          'occurredAt': now.toIso8601String(),
+        }),
+        'state': 'pending',
+        'created_at': now.toIso8601String(),
+      });
+    });
+
+    return LocalShift(
+      id: shiftId,
+      employeeId: employeeId,
+      employeeName: employeeName,
+      openedAt: now,
+      openingCashMinor: openingCashMinor,
+      status: 'open',
+    );
+  }
+
+  Future<LocalShift?> currentShift() async {
+    final rows = await _database.rawQuery(
+      '''
+      SELECT sh.*, e.name AS employee_name
+      FROM shift sh
+      INNER JOIN employee e ON e.id = sh.employee_id
+      WHERE sh.status = 'open'
+      ORDER BY sh.opened_at DESC
+      LIMIT 1
+      ''',
+    );
+    if (rows.isEmpty) return null;
+    return _shiftFromRow(rows.single);
+  }
+
+  LocalShift _shiftFromRow(Map<String, Object?> row) {
+    return LocalShift(
+      id: row['id']! as String,
+      employeeId: row['employee_id']! as String,
+      employeeName: row['employee_name']! as String,
+      openedAt: DateTime.parse(row['opened_at']! as String),
+      openingCashMinor: row['opening_cash_minor']! as int,
+      status: row['status']! as String,
+      closedAt: row['closed_at'] == null
+          ? null
+          : DateTime.parse(row['closed_at']! as String),
+      expectedClosingCashMinor: row['expected_closing_cash_minor'] as int?,
+      actualClosingCashMinor: row['actual_closing_cash_minor'] as int?,
+      varianceMinor: row['variance_minor'] as int?,
+    );
+  }
+
+  Future<List<LocalShift>> listShifts() async {
+    final rows = await _database.rawQuery(
+      '''
+      SELECT sh.*, e.name AS employee_name
+      FROM shift sh
+      INNER JOIN employee e ON e.id = sh.employee_id
+      ORDER BY sh.opened_at DESC
+      ''',
+    );
+    return rows.map(_shiftFromRow).toList();
+  }
+
+  Future<void> recordCashMovement({
+    required LocalSaleContext context,
+    required String movementType,
+    required int amountMinor,
+    required String reason,
+  }) async {
+    if (!{'deposit', 'withdrawal'}.contains(movementType) ||
+        amountMinor <= 0 ||
+        reason.trim().isEmpty) {
+      throw ArgumentError('Invalid cash movement');
+    }
+    final now = DateTime.now().toUtc();
+    final idempotencyKey = _uuid.v4();
+    await _database.transaction((txn) async {
+      final shiftId = await _openShiftId(txn);
+      if (shiftId == null) {
+        throw StateError('Open a shift before changing drawer cash');
+      }
+      final movementId = _uuid.v4();
+      await txn.insert('cash_movement', {
+        'id': movementId,
+        'shift_id': shiftId,
+        'movement_type': movementType,
+        'amount_minor': amountMinor,
+        'reason': reason.trim(),
+        'occurred_at': now.toIso8601String(),
+        'idempotency_key': idempotencyKey,
+      });
+      await txn.insert('sync_outbox', {
+        'id': _uuid.v4(),
+        'entity_type': 'cash_movement',
+        'entity_id': movementId,
+        'organization_id': context.organizationId,
+        'business_id': context.businessId,
+        'store_id': context.storeId,
+        'terminal_id': context.terminalId,
+        'idempotency_key': idempotencyKey,
+        'payload_json': jsonEncode({
+          'cashMovementId': movementId,
+          'shiftId': shiftId,
+          'movementType': movementType,
+          'amountMinor': amountMinor,
+          'reason': reason.trim(),
+          'occurredAt': now.toIso8601String(),
+        }),
+        'state': 'pending',
+        'created_at': now.toIso8601String(),
+      });
+    });
+  }
+
+  Future<LocalExpense> addExpense({
+    required LocalSaleContext context,
+    required String category,
+    required int amountMinor,
+    String paymentMethod = 'cash',
+    String? note,
+  }) async {
+    if (category.trim().isEmpty ||
+        amountMinor <= 0 ||
+        !{'cash', 'upi', 'card', 'bank'}.contains(paymentMethod)) {
+      throw ArgumentError('Invalid expense');
+    }
+    final now = DateTime.now().toUtc();
+    final expenseId = _uuid.v4();
+    final idempotencyKey = _uuid.v4();
+
+    await _database.transaction((txn) async {
+      final shiftId = await _openShiftId(txn);
+      if (paymentMethod == 'cash' && shiftId == null) {
+        throw StateError('Open a shift before recording a cash expense');
+      }
+      await txn.insert('expense', {
+        'id': expenseId,
+        'shift_id': shiftId,
+        'category': category.trim(),
+        'amount_minor': amountMinor,
+        'payment_method': paymentMethod,
+        'note': note?.trim(),
+        'occurred_at': now.toIso8601String(),
+        'idempotency_key': idempotencyKey,
+      });
+      await txn.insert('sync_outbox', {
+        'id': _uuid.v4(),
+        'entity_type': 'expense',
+        'entity_id': expenseId,
+        'organization_id': context.organizationId,
+        'business_id': context.businessId,
+        'store_id': context.storeId,
+        'terminal_id': context.terminalId,
+        'idempotency_key': idempotencyKey,
+        'payload_json': jsonEncode({
+          'expenseId': expenseId,
+          'shiftId': shiftId,
+          'category': category.trim(),
+          'amountMinor': amountMinor,
+          'paymentMethod': paymentMethod,
+          'note': note?.trim(),
+          'occurredAt': now.toIso8601String(),
+        }),
+        'state': 'pending',
+        'created_at': now.toIso8601String(),
+      });
+    });
+
+    return LocalExpense(
+      id: expenseId,
+      category: category.trim(),
+      amountMinor: amountMinor,
+      paymentMethod: paymentMethod,
+      occurredAt: now,
+      note: note?.trim(),
+    );
+  }
+
+  Future<List<LocalExpense>> listExpenses() async {
+    final rows = await _database.query('expense', orderBy: 'occurred_at DESC');
+    return rows
+        .map(
+          (row) => LocalExpense(
+            id: row['id']! as String,
+            category: row['category']! as String,
+            amountMinor: row['amount_minor']! as int,
+            paymentMethod: row['payment_method']! as String,
+            occurredAt: DateTime.parse(row['occurred_at']! as String),
+            note: row['note'] as String?,
+          ),
+        )
+        .toList();
+  }
+
+  Future<LocalShift> closeShift({
+    required LocalSaleContext context,
+    required int actualClosingCashMinor,
+    int varianceApprovalThresholdMinor = 50000,
+  }) async {
+    if (actualClosingCashMinor < 0 || varianceApprovalThresholdMinor < 0) {
+      throw ArgumentError('Invalid closing cash');
+    }
+    final now = DateTime.now().toUtc();
+    late LocalShift closed;
+
+    await _database.transaction((txn) async {
+      final shiftRows = await txn.rawQuery(
+        '''
+        SELECT sh.*, e.name AS employee_name
+        FROM shift sh
+        INNER JOIN employee e ON e.id = sh.employee_id
+        WHERE sh.status = 'open'
+        LIMIT 1
+        ''',
+      );
+      if (shiftRows.isEmpty) {
+        throw StateError('No open shift');
+      }
+      final row = shiftRows.single;
+      final shiftId = row['id']! as String;
+
+      final cashSalesRows = await txn.rawQuery(
+        '''
+        SELECT COALESCE(SUM(p.amount_minor), 0) AS total
+        FROM payment p
+        INNER JOIN sale s ON s.id = p.sale_id
+        WHERE s.shift_id = ? AND p.method = 'cash'
+        ''',
+        [shiftId],
+      );
+      final creditRows = await txn.rawQuery(
+        '''
+        SELECT COALESCE(SUM(amount_minor), 0) AS total
+        FROM customer_credit_entry
+        WHERE shift_id = ? AND entry_type = 'payment'
+          AND collection_method = 'cash'
+        ''',
+        [shiftId],
+      );
+      final movementRows = await txn.rawQuery(
+        '''
+        SELECT
+          COALESCE(SUM(CASE WHEN movement_type = 'deposit' THEN amount_minor ELSE 0 END), 0)
+            AS deposits,
+          COALESCE(SUM(CASE WHEN movement_type = 'withdrawal' THEN amount_minor ELSE 0 END), 0)
+            AS withdrawals
+        FROM cash_movement
+        WHERE shift_id = ?
+        ''',
+        [shiftId],
+      );
+      final expenseRows = await txn.rawQuery(
+        '''
+        SELECT COALESCE(SUM(amount_minor), 0) AS total
+        FROM expense
+        WHERE shift_id = ? AND payment_method = 'cash'
+        ''',
+        [shiftId],
+      );
+
+      final expected = expectedClosingCashMinor(
+        openingCashMinor: row['opening_cash_minor']! as int,
+        cashSalesMinor: cashSalesRows.single['total']! as int,
+        cashCreditCollectionsMinor: creditRows.single['total']! as int,
+        cashDepositsMinor: movementRows.single['deposits']! as int,
+        cashWithdrawalsMinor: movementRows.single['withdrawals']! as int,
+        cashExpensesMinor: expenseRows.single['total']! as int,
+      );
+      final variance = actualClosingCashMinor - expected;
+
+      await txn.update(
+        'shift',
+        {
+          'closed_at': now.toIso8601String(),
+          'expected_closing_cash_minor': expected,
+          'actual_closing_cash_minor': actualClosingCashMinor,
+          'variance_minor': variance,
+          'status': 'closed',
+        },
+        where: 'id = ?',
+        whereArgs: [shiftId],
+      );
+
+      if (variance.abs() > varianceApprovalThresholdMinor) {
+        await txn.insert('approval_request', {
+          'id': _uuid.v4(),
+          'action_type': 'cash_variance',
+          'entity_type': 'shift',
+          'entity_id': shiftId,
+          'requested_by_employee_id': row['employee_id'],
+          'requested_at': now.toIso8601String(),
+          'status': 'pending',
+          'reason': 'Cash variance requires review',
+        });
+      }
+
+      final idempotencyKey = _uuid.v4();
+      await txn.insert('sync_outbox', {
+        'id': _uuid.v4(),
+        'entity_type': 'shift',
+        'entity_id': shiftId,
+        'organization_id': context.organizationId,
+        'business_id': context.businessId,
+        'store_id': context.storeId,
+        'terminal_id': context.terminalId,
+        'idempotency_key': idempotencyKey,
+        'payload_json': jsonEncode({
+          'shiftId': shiftId,
+          'event': 'closed',
+          'expectedClosingCashMinor': expected,
+          'actualClosingCashMinor': actualClosingCashMinor,
+          'varianceMinor': variance,
+          'closedAt': now.toIso8601String(),
+        }),
+        'state': 'pending',
+        'created_at': now.toIso8601String(),
+      });
+
+      closed = LocalShift(
+        id: shiftId,
+        employeeId: row['employee_id']! as String,
+        employeeName: row['employee_name']! as String,
+        openedAt: DateTime.parse(row['opened_at']! as String),
+        openingCashMinor: row['opening_cash_minor']! as int,
+        status: 'closed',
+        closedAt: now,
+        expectedClosingCashMinor: expected,
+        actualClosingCashMinor: actualClosingCashMinor,
+        varianceMinor: variance,
+      );
+    });
+    return closed;
+  }
+
+  Future<int> pendingApprovalCount() async {
+    final rows = await _database.rawQuery(
+      "SELECT COUNT(*) AS count FROM approval_request WHERE status = 'pending'",
+    );
+    return (rows.single['count'] as int?) ?? 0;
+  }
+
   Future<int> pendingOutboxCount() async {
     final rows = await _database.rawQuery(
       "SELECT COUNT(*) AS count FROM sync_outbox WHERE state = 'pending'",
