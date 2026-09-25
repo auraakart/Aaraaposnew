@@ -47,6 +47,8 @@ const grants: Readonly<Record<Role, ReadonlySet<Permission>>> = {
     "sale:create",
     "sale:discount",
     "refund:create",
+    "commerce:read",
+    "commerce:manage",
     "customer:credit",
     "expense:create",
     "shift:manage"
