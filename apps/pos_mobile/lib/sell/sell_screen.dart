@@ -20,6 +20,7 @@ class SellScreen extends StatefulWidget {
 class _SellScreenState extends State<SellScreen> {
   final searchController = TextEditingController();
   final Map<String, int> quantitiesMilli = {};
+  final Map<String, Product> cartProducts = {};
   List<Product> products = const [];
   bool loading = true;
   int pendingSync = 0;
@@ -50,10 +51,9 @@ class _SellScreenState extends State<SellScreen> {
   }
 
   List<SaleLineInput> get cartLines {
-    final byId = {for (final product in products) product.id: product};
     final lines = <SaleLineInput>[];
     for (final entry in quantitiesMilli.entries) {
-      final product = byId[entry.key];
+      final product = cartProducts[entry.key];
       if (product != null && entry.value > 0) {
         lines.add(SaleLineInput(product: product, quantityMilli: entry.value));
       }
@@ -71,6 +71,7 @@ class _SellScreenState extends State<SellScreen> {
 
   void add(Product product) {
     setState(() {
+      cartProducts[product.id] = product;
       quantitiesMilli.update(
         product.id,
         (value) => value + 1000,
@@ -84,6 +85,7 @@ class _SellScreenState extends State<SellScreen> {
       final next = (quantitiesMilli[product.id] ?? 0) - 1000;
       if (next <= 0) {
         quantitiesMilli.remove(product.id);
+        cartProducts.remove(product.id);
       } else {
         quantitiesMilli[product.id] = next;
       }
@@ -290,7 +292,10 @@ class _SellScreenState extends State<SellScreen> {
       if (!mounted) {
         return;
       }
-      setState(() => quantitiesMilli.clear());
+      setState(() {
+        quantitiesMilli.clear();
+        cartProducts.clear();
+      });
       await refreshProducts(searchController.text);
       if (!mounted) {
         return;
