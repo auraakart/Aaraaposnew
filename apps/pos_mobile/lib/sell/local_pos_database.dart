@@ -921,9 +921,6 @@ class LocalPosDatabase {
       final shiftId = collectionMethod == 'cash'
           ? await _openShiftId(txn)
           : null;
-      if (collectionMethod == 'cash' && shiftId == null) {
-        throw StateError('Open a shift before collecting cash credit');
-      }
       await txn.insert('customer_credit_entry', {
         'id': entryId,
         'customer_id': customerId,
