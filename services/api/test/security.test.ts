@@ -63,3 +63,10 @@ test("stock worker can execute authorized stock transfers", () => {
   assert.equal(hasPermission("stock_worker", "transfer:create"), true);
   assert.equal(hasPermission("stock_worker", "transfer:receive"), true);
 });
+
+
+test("cashier can manage commerce orders but stock worker cannot", () => {
+  assert.equal(hasPermission("cashier", "commerce:read"), true);
+  assert.equal(hasPermission("cashier", "commerce:manage"), true);
+  assert.equal(hasPermission("stock_worker", "commerce:manage"), false);
+});
