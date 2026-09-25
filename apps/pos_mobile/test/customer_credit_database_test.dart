@@ -1,7 +1,6 @@
 import 'package:aaraapos_pos/sell/local_pos_database.dart';
 import 'package:aaraapos_pos/sell/sale_domain.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:sqflite/sqflite.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
 void main() {
