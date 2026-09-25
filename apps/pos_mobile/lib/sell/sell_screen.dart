@@ -209,7 +209,7 @@ class _SellScreenState extends State<SellScreen> {
       availableMethods: const {PaymentMethod.cash},
       splitEnabled: false,
     );
-    if (paymentChoice == null) {
+    if (!mounted || paymentChoice == null) {
       return;
     }
     if (paymentChoice != PaymentChoice.cash) {
