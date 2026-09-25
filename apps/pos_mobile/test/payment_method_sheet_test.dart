@@ -71,12 +71,16 @@ void main() {
 
     await tester.tap(find.text('Pay'));
     await tester.pumpAndSettle();
+    final payLaterTile = find.widgetWithText(
+      ListTile,
+      'Customer Credit / Pay Later',
+    );
     await tester.scrollUntilVisible(
-      find.text('Customer Credit / Pay Later'),
+      payLaterTile,
       120,
       scrollable: find.byType(Scrollable).last,
     );
-    await tester.tap(find.text('Customer Credit / Pay Later'));
+    tester.widget<ListTile>(payLaterTile).onTap!.call();
     await tester.pumpAndSettle();
 
     expect(choice, PaymentChoice.customerCredit);
