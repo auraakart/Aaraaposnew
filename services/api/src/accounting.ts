@@ -80,7 +80,11 @@ export function validateAccountingExportRow(row: AccountingExportRow): void {
     row.tax.sgstMinor +
     row.tax.igstMinor +
     row.tax.unclassifiedTaxMinor;
-  if (row.kind !== "expenses" && row.kind !== "supplier_ledger") {
+  if (
+    row.kind === "sales" ||
+    row.kind === "returns" ||
+    row.kind === "purchases"
+  ) {
     if (row.tax.taxableMinor + taxMinor !== row.totalMinor) {
       throw new Error(
         "Taxable amount plus tax must equal accounting row total"
