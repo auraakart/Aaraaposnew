@@ -54,7 +54,7 @@ class _CommerceOrdersScreenState extends State<CommerceOrdersScreen> {
     }
 
     var channel = CommerceChannel.whatsapp;
-    String? customerId;
+    var customerSelection = '__guest__';
     final note = TextEditingController();
     final externalRef = TextEditingController();
     final quantities = <String, int>{};
@@ -94,24 +94,27 @@ class _CommerceOrdersScreenState extends State<CommerceOrdersScreen> {
                     },
                   ),
                   const SizedBox(height: 12),
-                  DropdownButtonFormField<String?>(
-                    initialValue: customerId,
+                  DropdownButtonFormField<String>(
+                    initialValue: customerSelection,
                     decoration: const InputDecoration(
                       labelText: 'Customer (optional)',
                     ),
                     items: [
-                      const DropdownMenuItem<String?>(
-                        value: null,
+                      const DropdownMenuItem<String>(
+                        value: '__guest__',
                         child: Text('Guest / not linked'),
                       ),
                       for (final customer in customers)
-                        DropdownMenuItem<String?>(
+                        DropdownMenuItem<String>(
                           value: customer.id,
                           child: Text(customer.name),
                         ),
                     ],
-                    onChanged: (next) =>
-                        setDialogState(() => customerId = next),
+                    onChanged: (next) {
+                      if (next != null) {
+                        setDialogState(() => customerSelection = next);
+                      }
+                    },
                   ),
                   const SizedBox(height: 12),
                   if (channel == CommerceChannel.whatsapp)
@@ -220,7 +223,9 @@ class _CommerceOrdersScreenState extends State<CommerceOrdersScreen> {
                         context: widget.saleContext,
                         channel: channel,
                         lines: lines,
-                        customerId: customerId,
+                        customerId: customerSelection == '__guest__'
+                            ? null
+                            : customerSelection,
                         externalConversationRef: externalRef.text,
                         note: note.text,
                       );
