@@ -381,7 +381,7 @@ class _SellScreenState extends State<SellScreen> {
                       gridDelegate:
                           const SliverGridDelegateWithMaxCrossAxisExtent(
                         maxCrossAxisExtent: 220,
-                        childAspectRatio: 1.45,
+                        mainAxisExtent: 170,
                         crossAxisSpacing: 12,
                         mainAxisSpacing: 12,
                       ),
