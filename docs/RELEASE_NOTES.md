@@ -1,5 +1,11 @@
 # Release Notes
 
+## V2.6 Commerce / WhatsApp-Ready Foundation — validation
+
+Added provider-neutral commerce orders with channel provenance, manual WhatsApp/phone capture, Received → Confirmed → Ready → Completed lifecycle, explicit RBAC, consent-aware WhatsApp messaging rules, inbound-event persistence, offline order queue, and conversion into the existing Sell/payment pipeline.
+
+Commerce orders remain pre-sale intent; revenue, payment and stock change only through finalized POS sales. No real WhatsApp provider or web storefront is claimed.
+
 ## V2.5 Accounting & Export Foundation — validation
 
 Added source-linked sales, returns, purchases, expenses, customer-credit and supplier-ledger registers; separated sales/return/purchase tax summaries; explicit unclassified purchase tax; spreadsheet-safe CSV copy/share; export audit schema; owner Accounting Export UI; and regression tests.
@@ -100,6 +106,7 @@ Not claimed:
 - tax filing gateways or regulatory certification
 - physical hardware certification
 - production credentials, hosting or deployment
+
 
 
 
