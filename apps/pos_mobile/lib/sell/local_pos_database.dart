@@ -2432,15 +2432,23 @@ class LocalPosDatabase {
         answer: needsAttention.isEmpty
             ? 'No stock item currently needs attention.'
             : '${needsAttention.length} item${needsAttention.length == 1 ? '' : 's'} need attention: $names.',
-        evidence: [
-          for (final item in needsAttention.take(10))
-            InsightEvidence(
-              sourceType: 'stock_movement',
-              sourceId: item.productId,
-              metric: 'on_hand_milli',
-              value: item.onHandMilli,
-            ),
-        ],
+        evidence: needsAttention.isEmpty
+            ? const [
+                InsightEvidence(
+                  sourceType: 'stock_movement',
+                  metric: 'items_needing_attention',
+                  value: 0,
+                ),
+              ]
+            : [
+                for (final item in needsAttention.take(10))
+                  InsightEvidence(
+                    sourceType: 'stock_movement',
+                    sourceId: item.productId,
+                    metric: 'on_hand_milli',
+                    value: item.onHandMilli,
+                  ),
+              ],
       );
     }
 
