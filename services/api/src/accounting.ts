@@ -11,6 +11,7 @@ export interface AccountingTaxBreakdown {
   cgstMinor: number;
   sgstMinor: number;
   igstMinor: number;
+  unclassifiedTaxMinor: number;
 }
 
 export interface AccountingExportRow {
@@ -40,6 +41,7 @@ export interface AccountingExportManifest {
   cgstMinor: number;
   sgstMinor: number;
   igstMinor: number;
+  unclassifiedTaxMinor: number;
 }
 
 function assertNonNegativeSafeInteger(value: number, field: string): void {
@@ -63,6 +65,7 @@ export function validateAccountingExportRow(row: AccountingExportRow): void {
     cgstMinor: row.tax.cgstMinor,
     sgstMinor: row.tax.sgstMinor,
     igstMinor: row.tax.igstMinor,
+    unclassifiedTaxMinor: row.tax.unclassifiedTaxMinor,
     totalMinor: row.totalMinor
   })) {
     assertNonNegativeSafeInteger(value, field);
@@ -72,7 +75,11 @@ export function validateAccountingExportRow(row: AccountingExportRow): void {
     throw new Error("Accounting export discount cannot exceed gross");
   }
 
-  const taxMinor = row.tax.cgstMinor + row.tax.sgstMinor + row.tax.igstMinor;
+  const taxMinor =
+    row.tax.cgstMinor +
+    row.tax.sgstMinor +
+    row.tax.igstMinor +
+    row.tax.unclassifiedTaxMinor;
   if (row.kind !== "expenses" && row.kind !== "supplier_ledger") {
     if (row.tax.taxableMinor + taxMinor !== row.totalMinor) {
       throw new Error(
@@ -96,7 +103,8 @@ export function buildAccountingManifest(
     taxableMinor: 0,
     cgstMinor: 0,
     sgstMinor: 0,
-    igstMinor: 0
+    igstMinor: 0,
+    unclassifiedTaxMinor: 0
   };
 
   for (const row of rows) {
@@ -105,6 +113,7 @@ export function buildAccountingManifest(
     manifest.cgstMinor += row.tax.cgstMinor;
     manifest.sgstMinor += row.tax.sgstMinor;
     manifest.igstMinor += row.tax.igstMinor;
+    manifest.unclassifiedTaxMinor += row.tax.unclassifiedTaxMinor;
 
     switch (row.kind) {
       case "sales":
@@ -157,6 +166,7 @@ export function accountingRowsToCsv(
     "CGST Minor",
     "SGST Minor",
     "IGST Minor",
+    "Unclassified Tax Minor",
     "Total Minor",
     "Payment Method",
     "Status"
@@ -180,6 +190,7 @@ export function accountingRowsToCsv(
         row.tax.cgstMinor,
         row.tax.sgstMinor,
         row.tax.igstMinor,
+        row.tax.unclassifiedTaxMinor,
         row.totalMinor,
         row.paymentMethod,
         row.status
