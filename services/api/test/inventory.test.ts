@@ -46,6 +46,20 @@ test("damage loss and manual adjustment require reasons", () => {
   );
 });
 
+test("purchase return is a traceable negative stock movement", () => {
+  assert.doesNotThrow(() =>
+    validateStockMovement({
+      id: "return-1",
+      productId: "p1",
+      type: "purchase_return",
+      quantityDeltaMilli: -1000,
+      reason: "Return to supplier",
+      sourceEntityType: "purchase_return",
+      sourceEntityId: "pr-1"
+    })
+  );
+});
+
 test("stock count creates only the difference", () => {
   assert.equal(countAdjustmentDelta(12000, 10500), -1500);
   assert.equal(countAdjustmentDelta(12000, 12000), 0);
