@@ -6,6 +6,9 @@ export const permissions = [
   "inventory:receive",
   "inventory:count",
   "inventory:adjust",
+  "store:read",
+  "transfer:create",
+  "transfer:receive",
   "customer:credit",
   "expense:create",
   "shift:manage",
@@ -27,6 +30,9 @@ const grants: Readonly<Record<Role, ReadonlySet<Permission>>> = {
     "inventory:receive",
     "inventory:count",
     "inventory:adjust",
+    "store:read",
+    "transfer:create",
+    "transfer:receive",
     "customer:credit",
     "expense:create",
     "shift:manage",
@@ -44,7 +50,10 @@ const grants: Readonly<Record<Role, ReadonlySet<Permission>>> = {
   stock_worker: new Set([
     "inventory:receive",
     "inventory:count",
-    "inventory:adjust"
+    "inventory:adjust",
+    "store:read",
+    "transfer:create",
+    "transfer:receive"
   ])
 };
 

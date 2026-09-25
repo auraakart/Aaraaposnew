@@ -52,3 +52,14 @@ test("authorized scope passes", () => {
     storeId: "store-a"
   }, "sale:create"));
 });
+
+
+test("cashier cannot create inter-store transfers", () => {
+  assert.equal(hasPermission("cashier", "transfer:create"), false);
+  assert.equal(hasPermission("cashier", "transfer:receive"), false);
+});
+
+test("stock worker can execute authorized stock transfers", () => {
+  assert.equal(hasPermission("stock_worker", "transfer:create"), true);
+  assert.equal(hasPermission("stock_worker", "transfer:receive"), true);
+});

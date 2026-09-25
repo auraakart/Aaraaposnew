@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../multistore/store_scope_screen.dart';
 import '../operations/operations_screen.dart';
 import '../purchases/purchases_screen.dart';
 import '../returns/returns_screen.dart';
@@ -20,6 +21,26 @@ class MoreScreen extends StatelessWidget {
     return ListView(
       padding: const EdgeInsets.all(16),
       children: [
+        Card(
+          child: ListTile(
+            leading: const Icon(Icons.store_mall_directory_outlined),
+            title: const Text('Store & Terminal'),
+            subtitle: const Text(
+              'Store scope, offline binding and multi-store boundaries',
+            ),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () {
+              Navigator.of(context).push(
+                MaterialPageRoute<void>(
+                  builder: (_) => Scaffold(
+                    appBar: AppBar(title: const Text('Store & Terminal')),
+                    body: StoreScopeScreen(saleContext: saleContext),
+                  ),
+                ),
+              );
+            },
+          ),
+        ),
         Card(
           child: ListTile(
             leading: const Icon(Icons.assignment_return_outlined),
