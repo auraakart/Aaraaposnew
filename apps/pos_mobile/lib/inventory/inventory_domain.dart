@@ -91,3 +91,25 @@ String stockHealthLabel(StockHealth health) => switch (health) {
       StockHealth.outOfStock => 'Out of stock',
       StockHealth.negative => 'Check stock',
     };
+
+
+class LocalInventoryItem {
+  const LocalInventoryItem({
+    required this.productId,
+    required this.name,
+    required this.onHandMilli,
+    required this.reorderLevelMilli,
+    this.barcode,
+  });
+
+  final String productId;
+  final String name;
+  final String? barcode;
+  final int onHandMilli;
+  final int reorderLevelMilli;
+
+  StockHealth get health => stockHealth(
+        onHandMilli: onHandMilli,
+        reorderLevelMilli: reorderLevelMilli,
+      );
+}
