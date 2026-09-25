@@ -37,11 +37,19 @@ test("accounting manifest preserves register and GST totals", () => {
     expensesMinor: 0,
     customerCreditMinor: 0,
     supplierLedgerMinor: 0,
-    taxableMinor: 10000,
-    cgstMinor: 900,
-    sgstMinor: 900,
-    igstMinor: 0,
-    unclassifiedTaxMinor: 0
+    salesTaxableMinor: 10000,
+    salesCgstMinor: 900,
+    salesSgstMinor: 900,
+    salesIgstMinor: 0,
+    returnsTaxableMinor: 0,
+    returnsCgstMinor: 0,
+    returnsSgstMinor: 0,
+    returnsIgstMinor: 0,
+    purchaseTaxableMinor: 0,
+    purchaseCgstMinor: 0,
+    purchaseSgstMinor: 0,
+    purchaseIgstMinor: 0,
+    purchaseUnclassifiedTaxMinor: 0
   });
 });
 
