@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import 'customers/customers_screen.dart';
+import 'intelligence/business_today_screen.dart';
 import 'inventory/stock_screen.dart';
 import 'more/more_screen.dart';
 import 'sell/bootstrap_screen.dart';
@@ -187,8 +188,10 @@ class _MainShellState extends State<MainShell> {
           ),
         ],
       ),
-      body: index == 1
-          ? SellScreen(
+      body: index == 0
+          ? BusinessTodayScreen(database: widget.database)
+          : index == 1
+              ? SellScreen(
               database: widget.database,
               saleContext: widget.saleContext,
             )
@@ -202,12 +205,10 @@ class _MainShellState extends State<MainShell> {
                       database: widget.database,
                       saleContext: widget.saleContext,
                     )
-                  : index == 4
-                      ? MoreScreen(
-                          database: widget.database,
-                          saleContext: widget.saleContext,
-                        )
-                      : _PlaceholderPanel(title: titles[index]),
+                  : MoreScreen(
+                      database: widget.database,
+                      saleContext: widget.saleContext,
+                    ),
       bottomNavigationBar: NavigationBar(
         selectedIndex: index,
         destinations: destinations,
