@@ -1,5 +1,25 @@
 BEGIN;
 
+ALTER TABLE stock_movement
+  DROP CONSTRAINT IF EXISTS stock_movement_movement_type_check;
+
+ALTER TABLE stock_movement
+  ADD CONSTRAINT stock_movement_movement_type_check
+  CHECK (
+    movement_type IN (
+      'opening',
+      'receive',
+      'sale',
+      'return_in',
+      'adjustment',
+      'damage',
+      'loss',
+      'transfer_in',
+      'transfer_out',
+      'purchase_return'
+    )
+  );
+
 CREATE TABLE supplier (
   id uuid PRIMARY KEY,
   organization_id uuid NOT NULL REFERENCES organization(id),
