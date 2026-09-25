@@ -35,6 +35,18 @@ test("split payment must equal the sale total exactly", () => {
   );
 });
 
+test("customer credit is a valid non-provider settlement", () => {
+  assert.doesNotThrow(() =>
+    validateSplitPayment(85000, [
+      {
+        method: "customer_credit",
+        amountMinor: 85000,
+        status: "captured"
+      }
+    ])
+  );
+});
+
 test("captured UPI/card requires provider evidence", () => {
   assert.throws(() =>
     validateSplitPayment(5000, [
