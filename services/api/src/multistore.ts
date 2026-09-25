@@ -170,3 +170,45 @@ export function aggregateStoreMetrics(
     stores: metrics
   };
 }
+
+
+export interface TransferStockEvent {
+  storeId: string;
+  productId: string;
+  movementType: "transfer_out" | "transfer_in";
+  quantityDeltaMilli: number;
+  sourceEntityType: "store_transfer";
+  sourceEntityId: string;
+}
+
+export function transferStockEvents(
+  transfer: StoreTransfer
+): readonly TransferStockEvent[] {
+  validateStoreTransfer(transfer);
+  if (transfer.status !== "dispatched" && transfer.status !== "received") {
+    throw new Error("Stock events require a dispatched or received transfer");
+  }
+
+  const events: TransferStockEvent[] = [];
+  for (const line of transfer.lines) {
+    events.push({
+      storeId: transfer.sourceStoreId,
+      productId: line.productId,
+      movementType: "transfer_out",
+      quantityDeltaMilli: -line.quantityMilli,
+      sourceEntityType: "store_transfer",
+      sourceEntityId: transfer.id
+    });
+    if (transfer.status === "received") {
+      events.push({
+        storeId: transfer.destinationStoreId,
+        productId: line.productId,
+        movementType: "transfer_in",
+        quantityDeltaMilli: line.quantityMilli,
+        sourceEntityType: "store_transfer",
+        sourceEntityId: transfer.id
+      });
+    }
+  }
+  return events;
+}
