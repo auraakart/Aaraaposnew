@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../loyalty/loyalty_promotions_screen.dart';
 import '../multistore/store_scope_screen.dart';
 import '../operations/operations_screen.dart';
 import '../purchases/purchases_screen.dart';
@@ -21,6 +22,29 @@ class MoreScreen extends StatelessWidget {
     return ListView(
       padding: const EdgeInsets.all(16),
       children: [
+        Card(
+          child: ListTile(
+            leading: const Icon(Icons.stars_outlined),
+            title: const Text('Loyalty & Offers'),
+            subtitle: const Text(
+              'Customer points and simple promotional offers',
+            ),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () {
+              Navigator.of(context).push(
+                MaterialPageRoute<void>(
+                  builder: (_) => Scaffold(
+                    appBar: AppBar(title: const Text('Loyalty & Offers')),
+                    body: LoyaltyPromotionsScreen(
+                      database: database,
+                      saleContext: saleContext,
+                    ),
+                  ),
+                ),
+              );
+            },
+          ),
+        ),
         Card(
           child: ListTile(
             leading: const Icon(Icons.store_mall_directory_outlined),

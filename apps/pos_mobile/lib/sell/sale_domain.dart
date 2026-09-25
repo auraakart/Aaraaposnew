@@ -25,11 +25,15 @@ class SaleLineInput {
     required this.product,
     required this.quantityMilli,
     this.discountMinor = 0,
+    this.discountSource,
+    this.discountReferenceId,
   });
 
   final Product product;
   final int quantityMilli;
   final int discountMinor;
+  final String? discountSource;
+  final String? discountReferenceId;
 }
 
 class PricedSaleLine {
@@ -44,6 +48,8 @@ class PricedSaleLine {
     required this.igstMinor,
     required this.taxMinor,
     required this.totalMinor,
+    this.discountSource,
+    this.discountReferenceId,
   });
 
   final Product product;
@@ -56,6 +62,8 @@ class PricedSaleLine {
   final int igstMinor;
   final int taxMinor;
   final int totalMinor;
+  final String? discountSource;
+  final String? discountReferenceId;
 }
 
 class SaleTotals {
@@ -141,6 +149,8 @@ PricedSaleLine priceSaleLine(SaleLineInput input, TaxMode taxMode) {
     igstMinor: igstMinor,
     taxMinor: taxMinor,
     totalMinor: totalMinor,
+    discountSource: input.discountSource,
+    discountReferenceId: input.discountReferenceId,
   );
 }
 

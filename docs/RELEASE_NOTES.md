@@ -1,5 +1,11 @@
 # Release Notes
 
+## V2.3 Loyalty & Promotions — validation
+
+Added append-only customer loyalty points, owner-configurable earning/redemption rules, point redemption with transaction-time balance validation, return reversal/restoration, deterministic best-offer selection, product/basket promotions, sale-line discount source traceability and Loyalty & Offers UI.
+
+Pay Later loyalty earning remains excluded until authenticated credit-settlement allocation exists; loyalty redemption is limited to tax-inclusive carts for deterministic visible value.
+
 ## V2.2 Multi-store Foundation — validation
 
 Added explicit store access permissions, source/destination authorization, database store-scope consistency, inter-store transfer lifecycle/events, multi-store aggregation domain and a Store & Terminal scope screen.
@@ -82,6 +88,7 @@ Not claimed:
 - tax filing gateways or regulatory certification
 - physical hardware certification
 - production credentials, hosting or deployment
+
 
 
 

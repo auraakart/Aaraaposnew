@@ -250,6 +250,9 @@ String _subtitle(LocalCustomer customer) {
   if (customer.creditBalanceMinor > 0) {
     parts.add('${formatInr(customer.creditBalanceMinor)} due');
   }
+  if (customer.loyaltyPoints > 0) {
+    parts.add('${customer.loyaltyPoints} loyalty points');
+  }
   if (customer.overdueMinor > 0) {
     parts.add('${formatInr(customer.overdueMinor)} overdue');
   }

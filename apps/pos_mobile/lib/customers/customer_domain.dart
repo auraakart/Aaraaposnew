@@ -46,6 +46,7 @@ class LocalCustomer {
     required this.creditBalanceMinor,
     required this.overdueMinor,
     required this.consent,
+    this.loyaltyPoints = 0,
     this.mobile,
     this.lastPurchaseAt,
   });
@@ -57,6 +58,7 @@ class LocalCustomer {
   final int overdueMinor;
   final DateTime? lastPurchaseAt;
   final CommunicationConsent consent;
+  final int loyaltyPoints;
 }
 
 bool _increasesCredit(CreditEntryType type) {
