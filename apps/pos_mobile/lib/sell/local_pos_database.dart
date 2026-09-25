@@ -464,12 +464,15 @@ class LocalPosDatabase {
     );
   }
 
-  Future<String?> recordStockMovement({
+  Future<String> _insertStockMovement(
+    DatabaseExecutor executor, {
     required LocalSaleContext context,
     required String productId,
     required StockMovementType type,
     required int quantityDeltaMilli,
     String? reason,
+    String? sourceEntityType,
+    String? sourceEntityId,
   }) async {
     validateStockMovement(
       type: type,
@@ -480,38 +483,59 @@ class LocalPosDatabase {
     final idempotencyKey = _uuid.v4();
     final now = DateTime.now().toUtc();
 
-    await _database.transaction((txn) async {
-      await txn.insert('stock_movement', {
-        'id': movementId,
-        'product_id': productId,
-        'movement_type': stockMovementTypeValue(type),
-        'quantity_delta_milli': quantityDeltaMilli,
+    await executor.insert('stock_movement', {
+      'id': movementId,
+      'product_id': productId,
+      'movement_type': stockMovementTypeValue(type),
+      'quantity_delta_milli': quantityDeltaMilli,
+      'reason': reason?.trim(),
+      'source_entity_type': sourceEntityType,
+      'source_entity_id': sourceEntityId,
+      'occurred_at': now.toIso8601String(),
+      'idempotency_key': idempotencyKey,
+    });
+    await executor.insert('sync_outbox', {
+      'id': _uuid.v4(),
+      'entity_type': 'stock_movement',
+      'entity_id': movementId,
+      'organization_id': context.organizationId,
+      'business_id': context.businessId,
+      'store_id': context.storeId,
+      'terminal_id': context.terminalId,
+      'idempotency_key': idempotencyKey,
+      'payload_json': jsonEncode({
+        'movementId': movementId,
+        'productId': productId,
+        'movementType': stockMovementTypeValue(type),
+        'quantityDeltaMilli': quantityDeltaMilli,
         'reason': reason?.trim(),
-        'occurred_at': now.toIso8601String(),
-        'idempotency_key': idempotencyKey,
-      });
-      await txn.insert('sync_outbox', {
-        'id': _uuid.v4(),
-        'entity_type': 'stock_movement',
-        'entity_id': movementId,
-        'organization_id': context.organizationId,
-        'business_id': context.businessId,
-        'store_id': context.storeId,
-        'terminal_id': context.terminalId,
-        'idempotency_key': idempotencyKey,
-        'payload_json': jsonEncode({
-          'movementId': movementId,
-          'productId': productId,
-          'movementType': stockMovementTypeValue(type),
-          'quantityDeltaMilli': quantityDeltaMilli,
-          'reason': reason?.trim(),
-          'occurredAt': now.toIso8601String(),
-        }),
-        'state': 'pending',
-        'created_at': now.toIso8601String(),
-      });
+        'sourceEntityType': sourceEntityType,
+        'sourceEntityId': sourceEntityId,
+        'occurredAt': now.toIso8601String(),
+      }),
+      'state': 'pending',
+      'created_at': now.toIso8601String(),
     });
     return movementId;
+  }
+
+  Future<String> recordStockMovement({
+    required LocalSaleContext context,
+    required String productId,
+    required StockMovementType type,
+    required int quantityDeltaMilli,
+    String? reason,
+  }) {
+    return _database.transaction(
+      (txn) => _insertStockMovement(
+        txn,
+        context: context,
+        productId: productId,
+        type: type,
+        quantityDeltaMilli: quantityDeltaMilli,
+        reason: reason,
+      ),
+    );
   }
 
   Future<String?> countStock({
@@ -519,30 +543,40 @@ class LocalPosDatabase {
     required String productId,
     required int countedMilli,
     required String reason,
-  }) async {
-    final rows = await _database.rawQuery(
-      '''
-      SELECT COALESCE(SUM(quantity_delta_milli), 0) AS on_hand_milli
-      FROM stock_movement
-      WHERE product_id = ?
-      ''',
-      [productId],
-    );
-    final current = rows.single['on_hand_milli']! as int;
-    final delta = countAdjustmentDelta(
-      currentOnHandMilli: current,
-      countedMilli: countedMilli,
-    );
-    if (delta == 0) {
-      return null;
+  }) {
+    if (countedMilli < 0) {
+      throw ArgumentError('Counted stock cannot be negative');
     }
-    return recordStockMovement(
-      context: context,
-      productId: productId,
-      type: StockMovementType.adjustment,
-      quantityDeltaMilli: delta,
-      reason: reason,
-    );
+    if (reason.trim().isEmpty) {
+      throw ArgumentError('A reason is required');
+    }
+
+    return _database.transaction((txn) async {
+      final rows = await txn.rawQuery(
+        '''
+        SELECT COALESCE(SUM(quantity_delta_milli), 0) AS on_hand_milli
+        FROM stock_movement
+        WHERE product_id = ?
+        ''',
+        [productId],
+      );
+      final current = rows.single['on_hand_milli']! as int;
+      final delta = countAdjustmentDelta(
+        currentOnHandMilli: current,
+        countedMilli: countedMilli,
+      );
+      if (delta == 0) {
+        return null;
+      }
+      return _insertStockMovement(
+        txn,
+        context: context,
+        productId: productId,
+        type: StockMovementType.adjustment,
+        quantityDeltaMilli: delta,
+        reason: reason,
+      );
+    });
   }
 
   Future<OfflineSaleResult> finalizeCashSale({
