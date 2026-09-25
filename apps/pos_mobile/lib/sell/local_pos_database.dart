@@ -819,12 +819,14 @@ class LocalPosDatabase {
     required LocalSaleContext context,
     required List<SaleLineInput> lines,
     required int tenderedMinor,
+    String? customerId,
   }) {
     return _finalizeSale(
       context: context,
       lines: lines,
       paymentMethod: 'cash',
       tenderedMinor: tenderedMinor,
+      customerId: customerId,
     );
   }
 
