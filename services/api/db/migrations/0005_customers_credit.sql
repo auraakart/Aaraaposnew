@@ -37,6 +37,17 @@ ALTER TABLE payment
   ADD CONSTRAINT payment_method_check
   CHECK (method IN ('cash', 'upi', 'card', 'customer_credit'));
 
+ALTER TABLE payment
+  DROP CONSTRAINT IF EXISTS payment_external_evidence_check;
+
+ALTER TABLE payment
+  ADD CONSTRAINT payment_external_evidence_check
+  CHECK (
+    method IN ('cash', 'customer_credit')
+    OR status <> 'captured'
+    OR (provider IS NOT NULL AND provider_reference IS NOT NULL)
+  );
+
 CREATE TABLE customer_credit_entry (
   id uuid PRIMARY KEY,
   organization_id uuid NOT NULL REFERENCES organization(id),
