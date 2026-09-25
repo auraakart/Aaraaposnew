@@ -73,3 +73,13 @@ test("provider event IDs produce stable inbound dedupe keys", () => {
     "commerce-event:example-whatsapp:evt-1"
   );
 });
+
+
+test("completed commerce order must link to a finalized sale identity", () => {
+  assert.throws(() =>
+    commerceOrderToSaleIntent({
+      ...order,
+      status: "completed"
+    })
+  );
+});
