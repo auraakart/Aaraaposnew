@@ -1,5 +1,11 @@
 # Release Notes
 
+## V2.4 Integration Contracts — validation
+
+Added versioned sync envelopes, explicit outbox state transitions, retry metadata, replay/idempotency collision rules, conflict classification, provider capability declarations, HMAC/timestamp webhook verification contracts, tenant-scoped ingestion/provider-event persistence and an owner-visible Integrations & Sync screen.
+
+No production provider, credentials or deployed sync transport is simulated.
+
 ## V2.3 Loyalty & Promotions — validation
 
 Added append-only customer loyalty points, owner-configurable earning/redemption rules, point redemption with transaction-time balance validation, return reversal/restoration, deterministic best-offer selection, product/basket promotions, sale-line discount source traceability and Loyalty & Offers UI.
@@ -88,6 +94,7 @@ Not claimed:
 - tax filing gateways or regulatory certification
 - physical hardware certification
 - production credentials, hosting or deployment
+
 
 
 
