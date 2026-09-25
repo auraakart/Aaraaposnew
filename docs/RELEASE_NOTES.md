@@ -1,5 +1,11 @@
 # Release Notes
 
+## V2.5 Accounting & Export Foundation — validation
+
+Added source-linked sales, returns, purchases, expenses, customer-credit and supplier-ledger registers; separated sales/return/purchase tax summaries; explicit unclassified purchase tax; spreadsheet-safe CSV copy/share; export audit schema; owner Accounting Export UI; and regression tests.
+
+This is a portable business register/export foundation, not statutory accounting, GST filing or a claim of external accounting-provider integration.
+
 ## V2.4 Integration Contracts — validation
 
 Added versioned sync envelopes, explicit outbox state transitions, retry metadata, replay/idempotency collision rules, conflict classification, provider capability declarations, HMAC/timestamp webhook verification contracts, tenant-scoped ingestion/provider-event persistence and an owner-visible Integrations & Sync screen.
@@ -94,6 +100,7 @@ Not claimed:
 - tax filing gateways or regulatory certification
 - physical hardware certification
 - production credentials, hosting or deployment
+
 
 
 
