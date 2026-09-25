@@ -1020,6 +1020,327 @@ class LocalPosDatabase {
     return result;
   }
 
+  Future<String> receivePurchaseOrder({
+    required LocalSaleContext context,
+    required String purchaseOrderId,
+    String? supplierInvoiceNumber,
+  }) async {
+    final receiptId = _uuid.v4();
+    final idempotencyKey = _uuid.v4();
+    final now = DateTime.now().toUtc();
+
+    await _database.transaction((txn) async {
+      final orderRows = await txn.query(
+        'purchase_order',
+        where: 'id = ?',
+        whereArgs: [purchaseOrderId],
+        limit: 1,
+      );
+      if (orderRows.isEmpty) {
+        throw StateError('Purchase order not found');
+      }
+      final order = orderRows.single;
+      final status = order['status']! as String;
+      if (status == 'received' || status == 'cancelled') {
+        throw StateError('Purchase order cannot be received');
+      }
+
+      final supplierId = order['supplier_id']! as String;
+      final lineRows = await txn.query(
+        'purchase_order_line',
+        where: 'purchase_order_id = ?',
+        whereArgs: [purchaseOrderId],
+      );
+      if (lineRows.isEmpty) {
+        throw StateError('Purchase order has no lines');
+      }
+
+      var totalMinor = 0;
+      final receivedLines = <Map<String, Object?>>[];
+
+      for (final line in lineRows) {
+        final orderedMilli = line['quantity_ordered_milli']! as int;
+        final alreadyReceived = line['quantity_received_milli']! as int;
+        final remainingMilli = orderedMilli - alreadyReceived;
+        if (remainingMilli <= 0) continue;
+
+        final unitCostMinor = line['unit_cost_minor']! as int;
+        final taxMinor = line['tax_minor']! as int;
+        final productId = line['product_id']! as String;
+        final lineTotalMinor = purchaseLineTotalMinor(
+          quantityMilli: remainingMilli,
+          unitCostMinor: unitCostMinor,
+          taxMinor: taxMinor,
+        );
+        totalMinor += lineTotalMinor;
+
+        final receiptLineId = _uuid.v4();
+        await txn.insert('purchase_receipt_line', {
+          'id': receiptLineId,
+          'purchase_receipt_id': receiptId,
+          'purchase_order_line_id': line['id'],
+          'product_id': productId,
+          'quantity_received_milli': remainingMilli,
+          'unit_cost_minor': unitCostMinor,
+          'tax_minor': taxMinor,
+          'line_total_minor': lineTotalMinor,
+        });
+
+        await txn.update(
+          'purchase_order_line',
+          {'quantity_received_milli': orderedMilli},
+          where: 'id = ?',
+          whereArgs: [line['id']],
+        );
+
+        await txn.insert('stock_movement', {
+          'id': _uuid.v4(),
+          'product_id': productId,
+          'movement_type': 'receive',
+          'quantity_delta_milli': remainingMilli,
+          'source_entity_type': 'purchase_receipt',
+          'source_entity_id': receiptId,
+          'occurred_at': now.toIso8601String(),
+          'idempotency_key': 'purchase-receipt:$receiptId:$productId',
+        });
+
+        receivedLines.add({
+          'productId': productId,
+          'quantityReceivedMilli': remainingMilli,
+          'unitCostMinor': unitCostMinor,
+          'taxMinor': taxMinor,
+          'lineTotalMinor': lineTotalMinor,
+        });
+      }
+
+      if (receivedLines.isEmpty || totalMinor <= 0) {
+        throw StateError('Nothing remains to receive');
+      }
+
+      await txn.insert('purchase_receipt', {
+        'id': receiptId,
+        'supplier_id': supplierId,
+        'purchase_order_id': purchaseOrderId,
+        'supplier_invoice_number': supplierInvoiceNumber?.trim().isEmpty ?? true
+            ? null
+            : supplierInvoiceNumber!.trim(),
+        'received_at': now.toIso8601String(),
+        'total_minor': totalMinor,
+        'idempotency_key': idempotencyKey,
+      });
+
+      await txn.insert('supplier_ledger_entry', {
+        'id': _uuid.v4(),
+        'supplier_id': supplierId,
+        'entry_type': 'purchase_charge',
+        'amount_minor': totalMinor,
+        'source_id': receiptId,
+        'occurred_at': now.toIso8601String(),
+        'idempotency_key': 'supplier-charge:$receiptId',
+      });
+
+      await txn.update(
+        'purchase_order',
+        {'status': 'received'},
+        where: 'id = ?',
+        whereArgs: [purchaseOrderId],
+      );
+
+      await txn.insert('sync_outbox', {
+        'id': _uuid.v4(),
+        'entity_type': 'purchase_receipt',
+        'entity_id': receiptId,
+        'organization_id': context.organizationId,
+        'business_id': context.businessId,
+        'store_id': context.storeId,
+        'terminal_id': context.terminalId,
+        'idempotency_key': idempotencyKey,
+        'payload_json': jsonEncode({
+          'purchaseReceiptId': receiptId,
+          'purchaseOrderId': purchaseOrderId,
+          'supplierId': supplierId,
+          'supplierInvoiceNumber': supplierInvoiceNumber?.trim(),
+          'receivedAt': now.toIso8601String(),
+          'totalMinor': totalMinor,
+          'lines': receivedLines,
+        }),
+        'state': 'pending',
+        'created_at': now.toIso8601String(),
+      });
+    });
+    return receiptId;
+  }
+
+  Future<String> recordPurchaseReturn({
+    required LocalSaleContext context,
+    required String supplierId,
+    required String productId,
+    required int quantityMilli,
+    required int creditMinor,
+    required String reason,
+    String? purchaseReceiptId,
+  }) async {
+    if (quantityMilli <= 0 || creditMinor <= 0 || reason.trim().isEmpty) {
+      throw ArgumentError('Invalid purchase return');
+    }
+    final returnId = _uuid.v4();
+    final idempotencyKey = _uuid.v4();
+    final now = DateTime.now().toUtc();
+
+    await _database.transaction((txn) async {
+      final stockRows = await txn.rawQuery(
+        '''
+        SELECT COALESCE(SUM(quantity_delta_milli), 0) AS on_hand_milli
+        FROM stock_movement
+        WHERE product_id = ?
+        ''',
+        [productId],
+      );
+      final onHand = stockRows.single['on_hand_milli']! as int;
+      if (quantityMilli > onHand) {
+        throw StateError('Purchase return exceeds available stock');
+      }
+
+      await txn.insert('purchase_return', {
+        'id': returnId,
+        'supplier_id': supplierId,
+        'purchase_receipt_id': purchaseReceiptId,
+        'product_id': productId,
+        'quantity_returned_milli': quantityMilli,
+        'credit_minor': creditMinor,
+        'reason': reason.trim(),
+        'returned_at': now.toIso8601String(),
+        'idempotency_key': idempotencyKey,
+      });
+
+      await txn.insert('stock_movement', {
+        'id': _uuid.v4(),
+        'product_id': productId,
+        'movement_type': 'purchase_return',
+        'quantity_delta_milli': -quantityMilli,
+        'reason': reason.trim(),
+        'source_entity_type': 'purchase_return',
+        'source_entity_id': returnId,
+        'occurred_at': now.toIso8601String(),
+        'idempotency_key': 'purchase-return:$returnId:$productId',
+      });
+
+      await txn.insert('supplier_ledger_entry', {
+        'id': _uuid.v4(),
+        'supplier_id': supplierId,
+        'entry_type': 'purchase_return_credit',
+        'amount_minor': creditMinor,
+        'source_id': returnId,
+        'note': reason.trim(),
+        'occurred_at': now.toIso8601String(),
+        'idempotency_key': 'supplier-return:$returnId',
+      });
+
+      await txn.insert('sync_outbox', {
+        'id': _uuid.v4(),
+        'entity_type': 'purchase_return',
+        'entity_id': returnId,
+        'organization_id': context.organizationId,
+        'business_id': context.businessId,
+        'store_id': context.storeId,
+        'terminal_id': context.terminalId,
+        'idempotency_key': idempotencyKey,
+        'payload_json': jsonEncode({
+          'purchaseReturnId': returnId,
+          'supplierId': supplierId,
+          'purchaseReceiptId': purchaseReceiptId,
+          'productId': productId,
+          'quantityReturnedMilli': quantityMilli,
+          'creditMinor': creditMinor,
+          'reason': reason.trim(),
+          'returnedAt': now.toIso8601String(),
+        }),
+        'state': 'pending',
+        'created_at': now.toIso8601String(),
+      });
+    });
+    return returnId;
+  }
+
+  Future<void> paySupplier({
+    required LocalSaleContext context,
+    required String supplierId,
+    required int amountMinor,
+    String paymentMethod = 'cash',
+    String? note,
+  }) {
+    if (amountMinor <= 0) {
+      throw ArgumentError('Supplier payment must be positive');
+    }
+    if (!{'cash', 'upi', 'card', 'bank'}.contains(paymentMethod)) {
+      throw ArgumentError('Unsupported supplier payment method');
+    }
+
+    return _database.transaction((txn) async {
+      final balance = await _supplierBalanceMinor(txn, supplierId);
+      if (balance <= 0 || amountMinor > balance) {
+        throw StateError('Supplier payment exceeds payable balance');
+      }
+
+      final entryId = _uuid.v4();
+      final idempotencyKey = _uuid.v4();
+      final now = DateTime.now().toUtc();
+      await txn.insert('supplier_ledger_entry', {
+        'id': entryId,
+        'supplier_id': supplierId,
+        'entry_type': 'payment',
+        'amount_minor': amountMinor,
+        'payment_method': paymentMethod,
+        'note': note?.trim(),
+        'occurred_at': now.toIso8601String(),
+        'idempotency_key': idempotencyKey,
+      });
+      await txn.insert('sync_outbox', {
+        'id': _uuid.v4(),
+        'entity_type': 'supplier_ledger_entry',
+        'entity_id': entryId,
+        'organization_id': context.organizationId,
+        'business_id': context.businessId,
+        'store_id': context.storeId,
+        'terminal_id': context.terminalId,
+        'idempotency_key': idempotencyKey,
+        'payload_json': jsonEncode({
+          'entryId': entryId,
+          'supplierId': supplierId,
+          'entryType': 'payment',
+          'amountMinor': amountMinor,
+          'paymentMethod': paymentMethod,
+          'note': note?.trim(),
+          'occurredAt': now.toIso8601String(),
+        }),
+        'state': 'pending',
+        'created_at': now.toIso8601String(),
+      });
+    });
+  }
+
+  Future<List<SupplierLedgerEntry>> supplierLedgerEntries(
+    String supplierId,
+  ) async {
+    final rows = await _database.query(
+      'supplier_ledger_entry',
+      where: 'supplier_id = ?',
+      whereArgs: [supplierId],
+      orderBy: 'occurred_at, id',
+    );
+    return rows
+        .map(
+          (row) => SupplierLedgerEntry(
+            id: row['id']! as String,
+            type: row['entry_type']! as String,
+            amountMinor: row['amount_minor']! as int,
+            occurredAt: DateTime.parse(row['occurred_at']! as String),
+            note: row['note'] as String?,
+          ),
+        )
+        .toList();
+  }
+
   Future<int> pendingOutboxCount() async {
     final rows = await _database.rawQuery(
       "SELECT COUNT(*) AS count FROM sync_outbox WHERE state = 'pending'",
