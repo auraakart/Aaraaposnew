@@ -1,5 +1,11 @@
 # Release Notes
 
+## V2 AI Assistance — validation
+
+Added an offline evidence-backed Business Assistant, daily summary, sales comparison, purchase suggestions, customer win-back candidates and cash anomaly insights. Every important insight is labelled as fact/calculation/prediction/recommendation and exposes supporting evidence.
+
+No production external AI provider or autonomous financial action is claimed.
+
 ## V1.6 Owner Intelligence — validation
 
 Home now provides period-based sales, bills, receipts, customer dues, expenses, guarded estimated profit, low-stock/cash exceptions, a business timeline and actionable data-quality checks.
@@ -62,6 +68,7 @@ Not claimed:
 - tax filing gateways or regulatory certification
 - physical hardware certification
 - production credentials, hosting or deployment
+
 
 
 
