@@ -2394,7 +2394,9 @@ class LocalPosDatabase {
       );
     }
 
-    if (normalized.contains('sale')) {
+    if (normalized.contains('sale') ||
+        normalized.contains('sell') ||
+        normalized.contains('sold')) {
       final metrics = await businessMetrics(ReportPeriod.today);
       return AssistantAnswer(
         question: question,
