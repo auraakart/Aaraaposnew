@@ -108,6 +108,7 @@ CREATE TABLE approval_request (
 );
 
 ALTER TABLE sale ADD COLUMN shift_id uuid REFERENCES shift(id);
+ALTER TABLE customer_credit_entry ADD COLUMN shift_id uuid REFERENCES shift(id);
 
 ALTER TABLE shift ENABLE ROW LEVEL SECURITY;
 ALTER TABLE cash_movement ENABLE ROW LEVEL SECURITY;
