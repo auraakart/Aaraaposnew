@@ -20,6 +20,48 @@ ALTER TABLE stock_movement
     )
   );
 
+DO $
+DECLARE
+  direction_constraint text;
+BEGIN
+  SELECT conname
+    INTO direction_constraint
+  FROM pg_constraint
+  WHERE conrelid = 'stock_movement'::regclass
+    AND contype = 'c'
+    AND pg_get_constraintdef(oid) LIKE '%movement_type%'
+    AND pg_get_constraintdef(oid) LIKE '%quantity_delta_milli%'
+  LIMIT 1;
+
+  IF direction_constraint IS NOT NULL THEN
+    EXECUTE format(
+      'ALTER TABLE stock_movement DROP CONSTRAINT %I',
+      direction_constraint
+    );
+  END IF;
+END $;
+
+ALTER TABLE stock_movement
+  ADD CONSTRAINT stock_movement_direction_check
+  CHECK (
+    (
+      movement_type IN ('opening', 'receive', 'return_in', 'transfer_in')
+      AND quantity_delta_milli > 0
+    )
+    OR
+    (
+      movement_type IN (
+        'sale',
+        'damage',
+        'loss',
+        'transfer_out',
+        'purchase_return'
+      )
+      AND quantity_delta_milli < 0
+    )
+    OR movement_type = 'adjustment'
+  );
+
 CREATE TABLE supplier (
   id uuid PRIMARY KEY,
   organization_id uuid NOT NULL REFERENCES organization(id),
