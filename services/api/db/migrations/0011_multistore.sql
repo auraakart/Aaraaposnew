@@ -3,6 +3,10 @@ BEGIN;
 ALTER TABLE store
   ADD COLUMN active boolean NOT NULL DEFAULT true;
 
+ALTER TABLE store
+  ADD CONSTRAINT store_scope_unique
+  UNIQUE (id, organization_id, business_id);
+
 CREATE TABLE user_store_access (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   organization_id uuid NOT NULL REFERENCES organization(id),
@@ -10,7 +14,9 @@ CREATE TABLE user_store_access (
   store_id uuid NOT NULL REFERENCES store(id),
   user_id uuid NOT NULL REFERENCES app_user(id),
   created_at timestamptz NOT NULL DEFAULT now(),
-  UNIQUE (business_id, store_id, user_id)
+  UNIQUE (business_id, store_id, user_id),
+  FOREIGN KEY (store_id, organization_id, business_id)
+    REFERENCES store(id, organization_id, business_id)
 );
 
 CREATE INDEX user_store_access_user_idx
@@ -45,6 +51,10 @@ CREATE TABLE store_transfer (
   idempotency_key text NOT NULL,
   UNIQUE (business_id, transfer_number),
   UNIQUE (organization_id, idempotency_key),
+  FOREIGN KEY (source_store_id, organization_id, business_id)
+    REFERENCES store(id, organization_id, business_id),
+  FOREIGN KEY (destination_store_id, organization_id, business_id)
+    REFERENCES store(id, organization_id, business_id),
   CHECK (source_store_id <> destination_store_id),
   CHECK (
     (status = 'draft'
