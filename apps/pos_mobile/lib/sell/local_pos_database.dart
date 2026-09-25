@@ -2715,7 +2715,7 @@ class LocalPosDatabase {
               value: soldMilli,
               window: 'last_14_days',
             ),
-            InsightEvidence(
+            const InsightEvidence(
               sourceType: 'calculation',
               metric: 'target_coverage_days',
               value: 7,
