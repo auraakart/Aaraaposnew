@@ -46,6 +46,7 @@ class OfflineSaleResult {
     required this.tenderedMinor,
     required this.changeMinor,
     required this.receiptText,
+    this.loyaltyPointsEarned = 0,
   });
 
   final String saleId;
@@ -54,6 +55,7 @@ class OfflineSaleResult {
   final int tenderedMinor;
   final int changeMinor;
   final String receiptText;
+  final int loyaltyPointsEarned;
 }
 
 class LocalPosDatabase {
@@ -1081,6 +1083,181 @@ class LocalPosDatabase {
     return product;
   }
 
+  Future<LoyaltyProgram> loyaltyProgram() async {
+    final rows = await _database.query(
+      'loyalty_program',
+      where: 'singleton_id = 1',
+      limit: 1,
+    );
+    if (rows.isEmpty) {
+      return const LoyaltyProgram(
+        enabled: false,
+        pointsPer100Rupees: 1,
+        redemptionMinorPerPoint: 100,
+        maxRedemptionBps: 2000,
+      );
+    }
+    final row = rows.single;
+    return LoyaltyProgram(
+      enabled: (row['enabled']! as int) == 1,
+      pointsPer100Rupees: row['points_per_100_rupees']! as int,
+      redemptionMinorPerPoint: row['redemption_minor_per_point']! as int,
+      maxRedemptionBps: row['max_redemption_bps']! as int,
+    );
+  }
+
+  Future<void> updateLoyaltyProgram(LoyaltyProgram program) async {
+    validateLoyaltyProgram(program);
+    await _database.update(
+      'loyalty_program',
+      {
+        'enabled': program.enabled ? 1 : 0,
+        'points_per_100_rupees': program.pointsPer100Rupees,
+        'redemption_minor_per_point': program.redemptionMinorPerPoint,
+        'max_redemption_bps': program.maxRedemptionBps,
+        'updated_at': DateTime.now().toUtc().toIso8601String(),
+      },
+      where: 'singleton_id = 1',
+    );
+  }
+
+  Future<int> customerLoyaltyBalance(String customerId) async {
+    final rows = await _database.rawQuery(
+      '''
+      SELECT COALESCE(
+        SUM(
+          CASE
+            WHEN entry_type IN ('earn', 'adjustment_in') THEN points
+            ELSE -points
+          END
+        ),
+        0
+      ) AS points
+      FROM customer_loyalty_entry
+      WHERE customer_id = ?
+      ''',
+      [customerId],
+    );
+    return rows.single['points']! as int;
+  }
+
+  Future<LocalPromotion> addPromotion({
+    required String name,
+    required String type,
+    required int value,
+    required DateTime startsAt,
+    required DateTime endsAt,
+    List<String> productIds = const [],
+    int minBasketMinor = 0,
+    int? maxDiscountMinor,
+  }) async {
+    final trimmed = name.trim();
+    if (trimmed.isEmpty ||
+        !{'percentage', 'fixed'}.contains(type) ||
+        value <= 0 ||
+        minBasketMinor < 0 ||
+        (maxDiscountMinor != null && maxDiscountMinor < 0) ||
+        !startsAt.isBefore(endsAt) ||
+        (type == 'percentage' && value > 10000)) {
+      throw ArgumentError('Invalid promotion');
+    }
+    final id = _uuid.v4();
+    await _database.transaction((txn) async {
+      await txn.insert('promotion', {
+        'id': id,
+        'name': trimmed,
+        'promotion_type': type,
+        'value': value,
+        'min_basket_minor': minBasketMinor,
+        'max_discount_minor': maxDiscountMinor,
+        'starts_at': startsAt.toUtc().toIso8601String(),
+        'ends_at': endsAt.toUtc().toIso8601String(),
+        'active': 1,
+      });
+      for (final productId in productIds.toSet()) {
+        await txn.insert('promotion_product', {
+          'promotion_id': id,
+          'product_id': productId,
+        });
+      }
+    });
+    return LocalPromotion(
+      id: id,
+      name: trimmed,
+      type: type,
+      value: value,
+      minBasketMinor: minBasketMinor,
+      maxDiscountMinor: maxDiscountMinor,
+      startsAt: startsAt.toUtc(),
+      endsAt: endsAt.toUtc(),
+      active: true,
+      productIds: productIds.toSet().toList(),
+    );
+  }
+
+  Future<List<LocalPromotion>> listPromotions({bool activeOnly = false}) async {
+    final rows = await _database.query(
+      'promotion',
+      where: activeOnly ? 'active = 1' : null,
+      orderBy: 'starts_at DESC, name COLLATE NOCASE',
+    );
+    final result = <LocalPromotion>[];
+    for (final row in rows) {
+      final id = row['id']! as String;
+      final products = await _database.query(
+        'promotion_product',
+        columns: ['product_id'],
+        where: 'promotion_id = ?',
+        whereArgs: [id],
+      );
+      result.add(
+        LocalPromotion(
+          id: id,
+          name: row['name']! as String,
+          type: row['promotion_type']! as String,
+          value: row['value']! as int,
+          minBasketMinor: row['min_basket_minor']! as int,
+          maxDiscountMinor: row['max_discount_minor'] as int?,
+          startsAt: DateTime.parse(row['starts_at']! as String),
+          endsAt: DateTime.parse(row['ends_at']! as String),
+          active: (row['active']! as int) == 1,
+          productIds: products
+              .map((value) => value['product_id']! as String)
+              .toList(),
+        ),
+      );
+    }
+    return result;
+  }
+
+  Future<void> setPromotionActive(String promotionId, bool active) async {
+    await _database.update(
+      'promotion',
+      {'active': active ? 1 : 0},
+      where: 'id = ?',
+      whereArgs: [promotionId],
+    );
+  }
+
+  Future<PromotionEvaluation?> bestPromotionForLines(
+    List<SaleLineInput> lines, {
+    DateTime? now,
+  }) async {
+    final gross = <String, int>{};
+    final existing = <String, int>{};
+    for (final line in lines) {
+      gross[line.product.id] =
+          (line.product.unitPriceMinor * line.quantityMilli + 500) ~/ 1000;
+      existing[line.product.id] = line.discountMinor;
+    }
+    return selectBestPromotion(
+      promotions: await listPromotions(activeOnly: true),
+      grossMinorByProduct: gross,
+      existingDiscountMinorByProduct: existing,
+      now: now ?? DateTime.now(),
+    );
+  }
+
   Future<LocalCustomer> addCustomer({
     required String name,
     String? mobile,
@@ -1174,6 +1351,7 @@ class LocalPosDatabase {
           consent: communicationConsentFromValue(
             row['communication_consent']! as String,
           ),
+          loyaltyPoints: await customerLoyaltyBalance(customerId),
         ),
       );
     }
@@ -3277,6 +3455,8 @@ class LocalPosDatabase {
           'quantity_milli': line.quantityMilli,
           'unit_price_minor': line.product.unitPriceMinor,
           'discount_minor': line.discountMinor,
+          'discount_source': line.discountSource,
+          'discount_reference_id': line.discountReferenceId,
           'tax_rate_bps': line.product.taxRateBps,
           'tax_price_mode': line.product.taxPriceMode == TaxPriceMode.exclusive
               ? 'exclusive'
@@ -3334,6 +3514,8 @@ class LocalPosDatabase {
               ),
               quantityMilli: row['quantity_milli']! as int,
               discountMinor: row['discount_minor']! as int,
+              discountSource: row['discount_source'] as String?,
+              discountReferenceId: row['discount_reference_id'] as String?,
             ),
           )
           .toList(),
@@ -4000,6 +4182,7 @@ class LocalPosDatabase {
     final saleId = _uuid.v4();
     final now = DateTime.now().toUtc();
     late final String invoiceNumber;
+    var loyaltyPointsEarned = 0;
 
     await _database.transaction((txn) async {
       if (isCredit) {
@@ -4087,6 +4270,9 @@ class LocalPosDatabase {
           'unit_price_minor': line.product.unitPriceMinor,
           'gross_minor': line.grossMinor,
           'discount_minor': line.discountMinor,
+          'discount_source': line.discountSource ??
+              (line.discountMinor > 0 ? 'manual' : null),
+          'discount_reference_id': line.discountReferenceId,
           'taxable_minor': line.taxableMinor,
           'cgst_minor': line.cgstMinor,
           'sgst_minor': line.sgstMinor,
@@ -4138,6 +4324,71 @@ class LocalPosDatabase {
           'due_date': dueDate?.toIso8601String().split('T').first,
           'occurred_at': now.toIso8601String(),
           'idempotency_key': 'credit:$saleId',
+        });
+      }
+
+      if (customerId != null) {
+        final programRows = await txn.query(
+          'loyalty_program',
+          where: 'singleton_id = 1',
+          limit: 1,
+        );
+        if (programRows.isNotEmpty) {
+          final programRow = programRows.single;
+          final program = LoyaltyProgram(
+            enabled: (programRow['enabled']! as int) == 1,
+            pointsPer100Rupees:
+                programRow['points_per_100_rupees']! as int,
+            redemptionMinorPerPoint:
+                programRow['redemption_minor_per_point']! as int,
+            maxRedemptionBps:
+                programRow['max_redemption_bps']! as int,
+          );
+          loyaltyPointsEarned =
+              earnedLoyaltyPoints(totals.totalMinor, program);
+          if (loyaltyPointsEarned > 0) {
+            await txn.insert('customer_loyalty_entry', {
+              'id': _uuid.v4(),
+              'customer_id': customerId,
+              'entry_type': 'earn',
+              'points': loyaltyPointsEarned,
+              'sale_id': saleId,
+              'note': 'Points earned on $invoiceNumber',
+              'occurred_at': now.toIso8601String(),
+              'idempotency_key': 'loyalty-earn:$saleId',
+            });
+            await txn.insert('sale_loyalty', {
+              'sale_id': saleId,
+              'customer_id': customerId,
+              'points_earned': loyaltyPointsEarned,
+              'points_redeemed': 0,
+              'redeemed_minor': 0,
+            });
+          }
+        }
+      }
+
+      final promotionDiscounts = <String, int>{};
+      for (final line in totals.lines) {
+        if (line.discountSource == 'promotion' &&
+            line.discountReferenceId != null &&
+            line.discountMinor > 0) {
+          promotionDiscounts.update(
+            line.discountReferenceId!,
+            (value) => value + line.discountMinor,
+            ifAbsent: () => line.discountMinor,
+          );
+        }
+      }
+      for (final entry in promotionDiscounts.entries) {
+        await txn.insert('promotion_redemption', {
+          'id': _uuid.v4(),
+          'promotion_id': entry.key,
+          'customer_id': customerId,
+          'sale_id': saleId,
+          'discount_minor': entry.value,
+          'redeemed_at': now.toIso8601String(),
+          'idempotency_key': 'promotion:$saleId:${entry.key}',
         });
       }
 
@@ -4200,6 +4451,10 @@ class LocalPosDatabase {
       ..writeln('------------------------')
       ..writeln('Total  ${formatInr(totals.totalMinor)}');
 
+    if (loyaltyPointsEarned > 0) {
+      receipt.writeln('Loyalty +$loyaltyPointsEarned points');
+    }
+
     if (isCash) {
       receipt
         ..writeln('Cash   ${formatInr(tendered!)}')
@@ -4220,6 +4475,7 @@ class LocalPosDatabase {
       tenderedMinor: tendered ?? 0,
       changeMinor: changeMinor,
       receiptText: receipt.toString(),
+      loyaltyPointsEarned: loyaltyPointsEarned,
     );
   }
 }
