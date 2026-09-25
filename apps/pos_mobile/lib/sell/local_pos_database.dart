@@ -80,7 +80,7 @@ class LocalPosDatabase {
     _db = await _factory.openDatabase(
       path,
       options: OpenDatabaseOptions(
-        version: 1,
+        version: 2,
         onCreate: (db, version) async {
           await db.execute('''
             CREATE TABLE local_context (
@@ -157,7 +157,23 @@ class LocalPosDatabase {
               amount_minor INTEGER NOT NULL,
               tendered_minor INTEGER NOT NULL,
               change_minor INTEGER NOT NULL,
+              provider TEXT,
+              provider_reference TEXT,
+              status TEXT NOT NULL DEFAULT 'captured',
+              reconciliation_status TEXT NOT NULL DEFAULT 'not_applicable',
               created_at TEXT NOT NULL
+            )
+          ''');
+          await db.execute('''
+            CREATE TABLE payment_event (
+              id TEXT PRIMARY KEY,
+              payment_id TEXT NOT NULL REFERENCES payment(id),
+              event_type TEXT NOT NULL,
+              payment_status TEXT NOT NULL,
+              provider_reference TEXT,
+              amount_minor INTEGER NOT NULL,
+              occurred_at TEXT NOT NULL,
+              metadata_json TEXT NOT NULL DEFAULT '{}'
             )
           ''');
           await db.execute('''
@@ -176,6 +192,34 @@ class LocalPosDatabase {
               last_error TEXT
             )
           ''');
+        },
+        onUpgrade: (db, oldVersion, newVersion) async {
+          if (oldVersion < 2) {
+            await db.execute(
+              "ALTER TABLE payment ADD COLUMN provider TEXT",
+            );
+            await db.execute(
+              "ALTER TABLE payment ADD COLUMN provider_reference TEXT",
+            );
+            await db.execute(
+              "ALTER TABLE payment ADD COLUMN status TEXT NOT NULL DEFAULT 'captured'",
+            );
+            await db.execute(
+              "ALTER TABLE payment ADD COLUMN reconciliation_status TEXT NOT NULL DEFAULT 'not_applicable'",
+            );
+            await db.execute('''
+              CREATE TABLE payment_event (
+                id TEXT PRIMARY KEY,
+                payment_id TEXT NOT NULL REFERENCES payment(id),
+                event_type TEXT NOT NULL,
+                payment_status TEXT NOT NULL,
+                provider_reference TEXT,
+                amount_minor INTEGER NOT NULL,
+                occurred_at TEXT NOT NULL,
+                metadata_json TEXT NOT NULL DEFAULT '{}'
+              )
+            ''');
+          }
         },
       ),
     );
@@ -329,6 +373,19 @@ class LocalPosDatabase {
     return (rows.single['count'] as int?) ?? 0;
   }
 
+  Future<int> paymentEventCountForSale(String saleId) async {
+    final rows = await _database.rawQuery(
+      '''
+      SELECT COUNT(*) AS count
+      FROM payment_event pe
+      INNER JOIN payment p ON p.id = pe.payment_id
+      WHERE p.sale_id = ?
+      ''',
+      [saleId],
+    );
+    return (rows.single['count'] as int?) ?? 0;
+  }
+
   Future<OfflineSaleResult> finalizeCashSale({
     required LocalSaleContext context,
     required List<SaleLineInput> lines,
@@ -396,14 +453,26 @@ class LocalPosDatabase {
         });
       }
 
+      final paymentId = _uuid.v4();
       await txn.insert('payment', {
-        'id': _uuid.v4(),
+        'id': paymentId,
         'sale_id': saleId,
         'method': 'cash',
         'amount_minor': totals.totalMinor,
         'tendered_minor': tenderedMinor,
         'change_minor': changeMinor,
+        'status': 'captured',
+        'reconciliation_status': 'not_applicable',
         'created_at': now.toIso8601String(),
+      });
+      await txn.insert('payment_event', {
+        'id': _uuid.v4(),
+        'payment_id': paymentId,
+        'event_type': 'captured',
+        'payment_status': 'captured',
+        'amount_minor': totals.totalMinor,
+        'occurred_at': now.toIso8601String(),
+        'metadata_json': jsonEncode({'method': 'cash'}),
       });
 
       final idempotencyKey = _uuid.v4();

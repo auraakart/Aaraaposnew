@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import '../payments/payment_domain.dart';
+import '../payments/payment_method_sheet.dart';
 import 'local_pos_database.dart';
 import 'sale_domain.dart';
 
@@ -199,6 +201,25 @@ class _SellScreenState extends State<SellScreen> {
   Future<void> checkout() async {
     final saleTotals = totals;
     if (saleTotals == null) {
+      return;
+    }
+
+    final paymentChoice = await showPaymentMethodSheet(
+      context,
+      availableMethods: const {PaymentMethod.cash},
+      splitEnabled: false,
+    );
+    if (!mounted || paymentChoice == null) {
+      return;
+    }
+    if (paymentChoice != PaymentChoice.cash) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('This payment method needs a configured provider.'),
+          ),
+        );
+      }
       return;
     }
 

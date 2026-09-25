@@ -1,5 +1,13 @@
 # Release Notes
 
+## V1.1 Payments — validation
+
+Added UPI/Card adapter contracts, provider availability coordination, deterministic split-payment validation, payment finalization rules, reconciliation matching, server and local payment-event ledgers, payment status/provider evidence fields and an explicit payment-method chooser.
+
+Cash remains fully operational. UPI/Card/Split stay disabled in the shipped UI until real providers are configured; no external payment success is simulated.
+
+Production provider integrations, webhook verification, real reconciliation feeds, payment-terminal certification and regulatory/provider compliance validation remain external work.
+
 ## V1 Sell — validation
 
 Added deterministic sale pricing, GST split calculation, weighted-quantity representation, first-run local store bootstrap, local product/barcode catalogue, fast cart interaction, cash checkout, local invoice sequencing, text receipts, durable SQLite sale/payment storage, sync outbox creation, server-side sales schema and regression tests.
@@ -22,3 +30,4 @@ Not claimed:
 - tax filing gateways or regulatory certification
 - physical hardware certification
 - production credentials, hosting or deployment
+
