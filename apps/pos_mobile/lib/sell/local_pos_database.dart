@@ -8,6 +8,7 @@ import '../ai/ai_domain.dart';
 import '../customers/customer_domain.dart';
 import '../intelligence/owner_intelligence.dart';
 import '../inventory/inventory_domain.dart';
+import '../loyalty/loyalty_domain.dart';
 import '../operations/operations_domain.dart';
 import '../purchases/purchase_domain.dart';
 import 'return_domain.dart';
@@ -87,7 +88,7 @@ class LocalPosDatabase {
     _db = await _factory.openDatabase(
       path,
       options: OpenDatabaseOptions(
-        version: 7,
+        version: 8,
         onConfigure: (db) async {
           await db.execute('PRAGMA foreign_keys = ON');
         },
@@ -164,6 +165,8 @@ class LocalPosDatabase {
               unit_price_minor INTEGER NOT NULL,
               gross_minor INTEGER NOT NULL,
               discount_minor INTEGER NOT NULL,
+              discount_source TEXT,
+              discount_reference_id TEXT,
               taxable_minor INTEGER NOT NULL,
               cgst_minor INTEGER NOT NULL,
               sgst_minor INTEGER NOT NULL,
@@ -375,6 +378,8 @@ class LocalPosDatabase {
               quantity_milli INTEGER NOT NULL,
               unit_price_minor INTEGER NOT NULL,
               discount_minor INTEGER NOT NULL DEFAULT 0,
+              discount_source TEXT,
+              discount_reference_id TEXT,
               tax_rate_bps INTEGER NOT NULL,
               tax_price_mode TEXT NOT NULL
             )
@@ -422,6 +427,68 @@ class LocalPosDatabase {
               status TEXT NOT NULL,
               created_at TEXT NOT NULL,
               idempotency_key TEXT NOT NULL UNIQUE
+            )
+          ''');
+          await db.execute('''
+            CREATE TABLE loyalty_program (
+              singleton_id INTEGER PRIMARY KEY CHECK (singleton_id = 1),
+              enabled INTEGER NOT NULL DEFAULT 0,
+              points_per_100_rupees INTEGER NOT NULL DEFAULT 1,
+              redemption_minor_per_point INTEGER NOT NULL DEFAULT 100,
+              max_redemption_bps INTEGER NOT NULL DEFAULT 2000,
+              updated_at TEXT NOT NULL
+            )
+          ''');
+          await db.execute('''
+            CREATE TABLE customer_loyalty_entry (
+              id TEXT PRIMARY KEY,
+              customer_id TEXT NOT NULL REFERENCES customer(id),
+              entry_type TEXT NOT NULL,
+              points INTEGER NOT NULL,
+              sale_id TEXT REFERENCES sale(id),
+              note TEXT,
+              occurred_at TEXT NOT NULL,
+              idempotency_key TEXT NOT NULL UNIQUE
+            )
+          ''');
+          await db.execute('''
+            CREATE TABLE promotion (
+              id TEXT PRIMARY KEY,
+              name TEXT NOT NULL,
+              promotion_type TEXT NOT NULL,
+              value INTEGER NOT NULL,
+              min_basket_minor INTEGER NOT NULL DEFAULT 0,
+              max_discount_minor INTEGER,
+              starts_at TEXT NOT NULL,
+              ends_at TEXT NOT NULL,
+              active INTEGER NOT NULL DEFAULT 1
+            )
+          ''');
+          await db.execute('''
+            CREATE TABLE promotion_product (
+              promotion_id TEXT NOT NULL REFERENCES promotion(id) ON DELETE CASCADE,
+              product_id TEXT NOT NULL REFERENCES product(id),
+              PRIMARY KEY (promotion_id, product_id)
+            )
+          ''');
+          await db.execute('''
+            CREATE TABLE promotion_redemption (
+              id TEXT PRIMARY KEY,
+              promotion_id TEXT NOT NULL REFERENCES promotion(id),
+              customer_id TEXT REFERENCES customer(id),
+              sale_id TEXT NOT NULL REFERENCES sale(id),
+              discount_minor INTEGER NOT NULL,
+              redeemed_at TEXT NOT NULL,
+              idempotency_key TEXT NOT NULL UNIQUE
+            )
+          ''');
+          await db.execute('''
+            CREATE TABLE sale_loyalty (
+              sale_id TEXT PRIMARY KEY REFERENCES sale(id),
+              customer_id TEXT NOT NULL REFERENCES customer(id),
+              points_earned INTEGER NOT NULL DEFAULT 0,
+              points_redeemed INTEGER NOT NULL DEFAULT 0,
+              redeemed_minor INTEGER NOT NULL DEFAULT 0
             )
           ''');
           await db.execute('''
@@ -762,6 +829,90 @@ class LocalPosDatabase {
               )
             ''');
           }
+          if (oldVersion < 8) {
+            await db.execute(
+              "ALTER TABLE sale_line ADD COLUMN discount_source TEXT",
+            );
+            await db.execute(
+              "ALTER TABLE sale_line ADD COLUMN discount_reference_id TEXT",
+            );
+            await db.execute(
+              "ALTER TABLE held_sale_line ADD COLUMN discount_source TEXT",
+            );
+            await db.execute(
+              "ALTER TABLE held_sale_line ADD COLUMN discount_reference_id TEXT",
+            );
+            await db.execute('''
+              CREATE TABLE loyalty_program (
+                singleton_id INTEGER PRIMARY KEY CHECK (singleton_id = 1),
+                enabled INTEGER NOT NULL DEFAULT 0,
+                points_per_100_rupees INTEGER NOT NULL DEFAULT 1,
+                redemption_minor_per_point INTEGER NOT NULL DEFAULT 100,
+                max_redemption_bps INTEGER NOT NULL DEFAULT 2000,
+                updated_at TEXT NOT NULL
+              )
+            ''');
+            await db.execute('''
+              CREATE TABLE customer_loyalty_entry (
+                id TEXT PRIMARY KEY,
+                customer_id TEXT NOT NULL REFERENCES customer(id),
+                entry_type TEXT NOT NULL,
+                points INTEGER NOT NULL,
+                sale_id TEXT REFERENCES sale(id),
+                note TEXT,
+                occurred_at TEXT NOT NULL,
+                idempotency_key TEXT NOT NULL UNIQUE
+              )
+            ''');
+            await db.execute('''
+              CREATE TABLE promotion (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                promotion_type TEXT NOT NULL,
+                value INTEGER NOT NULL,
+                min_basket_minor INTEGER NOT NULL DEFAULT 0,
+                max_discount_minor INTEGER,
+                starts_at TEXT NOT NULL,
+                ends_at TEXT NOT NULL,
+                active INTEGER NOT NULL DEFAULT 1
+              )
+            ''');
+            await db.execute('''
+              CREATE TABLE promotion_product (
+                promotion_id TEXT NOT NULL REFERENCES promotion(id) ON DELETE CASCADE,
+                product_id TEXT NOT NULL REFERENCES product(id),
+                PRIMARY KEY (promotion_id, product_id)
+              )
+            ''');
+            await db.execute('''
+              CREATE TABLE promotion_redemption (
+                id TEXT PRIMARY KEY,
+                promotion_id TEXT NOT NULL REFERENCES promotion(id),
+                customer_id TEXT REFERENCES customer(id),
+                sale_id TEXT NOT NULL REFERENCES sale(id),
+                discount_minor INTEGER NOT NULL,
+                redeemed_at TEXT NOT NULL,
+                idempotency_key TEXT NOT NULL UNIQUE
+              )
+            ''');
+            await db.execute('''
+              CREATE TABLE sale_loyalty (
+                sale_id TEXT PRIMARY KEY REFERENCES sale(id),
+                customer_id TEXT NOT NULL REFERENCES customer(id),
+                points_earned INTEGER NOT NULL DEFAULT 0,
+                points_redeemed INTEGER NOT NULL DEFAULT 0,
+                redeemed_minor INTEGER NOT NULL DEFAULT 0
+              )
+            ''');
+            await db.insert('loyalty_program', {
+              'singleton_id': 1,
+              'enabled': 0,
+              'points_per_100_rupees': 1,
+              'redemption_minor_per_point': 100,
+              'max_redemption_bps': 2000,
+              'updated_at': DateTime.now().toUtc().toIso8601String(),
+            });
+          }
         },
       ),
     );
@@ -846,6 +997,14 @@ class LocalPosDatabase {
         'role': 'owner',
         'active': 1,
         'created_at': DateTime.now().toUtc().toIso8601String(),
+      });
+      await txn.insert('loyalty_program', {
+        'singleton_id': 1,
+        'enabled': 0,
+        'points_per_100_rupees': 1,
+        'redemption_minor_per_point': 100,
+        'max_redemption_bps': 2000,
+        'updated_at': DateTime.now().toUtc().toIso8601String(),
       });
     });
 
