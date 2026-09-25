@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import 'customers/customers_screen.dart';
 import 'inventory/stock_screen.dart';
+import 'more/more_screen.dart';
 import 'sell/bootstrap_screen.dart';
 import 'sell/local_pos_database.dart';
 import 'sell/sell_screen.dart';
@@ -201,7 +202,12 @@ class _MainShellState extends State<MainShell> {
                       database: widget.database,
                       saleContext: widget.saleContext,
                     )
-                  : _PlaceholderPanel(title: titles[index]),
+                  : index == 4
+                      ? MoreScreen(
+                          database: widget.database,
+                          saleContext: widget.saleContext,
+                        )
+                      : _PlaceholderPanel(title: titles[index]),
       bottomNavigationBar: NavigationBar(
         selectedIndex: index,
         destinations: destinations,
