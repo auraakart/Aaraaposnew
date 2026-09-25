@@ -6,6 +6,7 @@ import 'package:uuid/uuid.dart';
 
 import '../customers/customer_domain.dart';
 import '../inventory/inventory_domain.dart';
+import '../purchases/purchase_domain.dart';
 import 'sale_domain.dart';
 
 class LocalSaleContext {
@@ -82,7 +83,7 @@ class LocalPosDatabase {
     _db = await _factory.openDatabase(
       path,
       options: OpenDatabaseOptions(
-        version: 4,
+        version: 5,
         onConfigure: (db) async {
           await db.execute('PRAGMA foreign_keys = ON');
         },
@@ -208,6 +209,86 @@ class LocalPosDatabase {
             )
           ''');
           await db.execute('''
+            CREATE TABLE supplier (
+              id TEXT PRIMARY KEY,
+              name TEXT NOT NULL,
+              mobile_e164 TEXT,
+              gstin TEXT,
+              created_at TEXT NOT NULL,
+              updated_at TEXT NOT NULL
+            )
+          ''');
+          await db.execute('''
+            CREATE TABLE purchase_order (
+              id TEXT PRIMARY KEY,
+              supplier_id TEXT NOT NULL REFERENCES supplier(id),
+              order_number TEXT NOT NULL UNIQUE,
+              status TEXT NOT NULL,
+              ordered_at TEXT NOT NULL,
+              note TEXT
+            )
+          ''');
+          await db.execute('''
+            CREATE TABLE purchase_order_line (
+              id TEXT PRIMARY KEY,
+              purchase_order_id TEXT NOT NULL REFERENCES purchase_order(id),
+              product_id TEXT NOT NULL REFERENCES product(id),
+              quantity_ordered_milli INTEGER NOT NULL,
+              quantity_received_milli INTEGER NOT NULL DEFAULT 0,
+              unit_cost_minor INTEGER NOT NULL,
+              tax_minor INTEGER NOT NULL DEFAULT 0
+            )
+          ''');
+          await db.execute('''
+            CREATE TABLE purchase_receipt (
+              id TEXT PRIMARY KEY,
+              supplier_id TEXT NOT NULL REFERENCES supplier(id),
+              purchase_order_id TEXT REFERENCES purchase_order(id),
+              supplier_invoice_number TEXT,
+              received_at TEXT NOT NULL,
+              total_minor INTEGER NOT NULL,
+              idempotency_key TEXT NOT NULL UNIQUE
+            )
+          ''');
+          await db.execute('''
+            CREATE TABLE purchase_receipt_line (
+              id TEXT PRIMARY KEY,
+              purchase_receipt_id TEXT NOT NULL REFERENCES purchase_receipt(id),
+              purchase_order_line_id TEXT REFERENCES purchase_order_line(id),
+              product_id TEXT NOT NULL REFERENCES product(id),
+              quantity_received_milli INTEGER NOT NULL,
+              unit_cost_minor INTEGER NOT NULL,
+              tax_minor INTEGER NOT NULL DEFAULT 0,
+              line_total_minor INTEGER NOT NULL
+            )
+          ''');
+          await db.execute('''
+            CREATE TABLE purchase_return (
+              id TEXT PRIMARY KEY,
+              supplier_id TEXT NOT NULL REFERENCES supplier(id),
+              purchase_receipt_id TEXT REFERENCES purchase_receipt(id),
+              product_id TEXT NOT NULL REFERENCES product(id),
+              quantity_returned_milli INTEGER NOT NULL,
+              credit_minor INTEGER NOT NULL,
+              reason TEXT NOT NULL,
+              returned_at TEXT NOT NULL,
+              idempotency_key TEXT NOT NULL UNIQUE
+            )
+          ''');
+          await db.execute('''
+            CREATE TABLE supplier_ledger_entry (
+              id TEXT PRIMARY KEY,
+              supplier_id TEXT NOT NULL REFERENCES supplier(id),
+              entry_type TEXT NOT NULL,
+              amount_minor INTEGER NOT NULL,
+              source_id TEXT,
+              payment_method TEXT,
+              note TEXT,
+              occurred_at TEXT NOT NULL,
+              idempotency_key TEXT NOT NULL UNIQUE
+            )
+          ''');
+          await db.execute('''
             CREATE TABLE stock_movement (
               id TEXT PRIMARY KEY,
               product_id TEXT NOT NULL REFERENCES product(id),
@@ -305,6 +386,88 @@ class LocalPosDatabase {
                 sale_id TEXT REFERENCES sale(id),
                 collection_method TEXT,
                 due_date TEXT,
+                note TEXT,
+                occurred_at TEXT NOT NULL,
+                idempotency_key TEXT NOT NULL UNIQUE
+              )
+            ''');
+          }
+          if (oldVersion < 5) {
+            await db.execute('''
+              CREATE TABLE supplier (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                mobile_e164 TEXT,
+                gstin TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+              )
+            ''');
+            await db.execute('''
+              CREATE TABLE purchase_order (
+                id TEXT PRIMARY KEY,
+                supplier_id TEXT NOT NULL REFERENCES supplier(id),
+                order_number TEXT NOT NULL UNIQUE,
+                status TEXT NOT NULL,
+                ordered_at TEXT NOT NULL,
+                note TEXT
+              )
+            ''');
+            await db.execute('''
+              CREATE TABLE purchase_order_line (
+                id TEXT PRIMARY KEY,
+                purchase_order_id TEXT NOT NULL REFERENCES purchase_order(id),
+                product_id TEXT NOT NULL REFERENCES product(id),
+                quantity_ordered_milli INTEGER NOT NULL,
+                quantity_received_milli INTEGER NOT NULL DEFAULT 0,
+                unit_cost_minor INTEGER NOT NULL,
+                tax_minor INTEGER NOT NULL DEFAULT 0
+              )
+            ''');
+            await db.execute('''
+              CREATE TABLE purchase_receipt (
+                id TEXT PRIMARY KEY,
+                supplier_id TEXT NOT NULL REFERENCES supplier(id),
+                purchase_order_id TEXT REFERENCES purchase_order(id),
+                supplier_invoice_number TEXT,
+                received_at TEXT NOT NULL,
+                total_minor INTEGER NOT NULL,
+                idempotency_key TEXT NOT NULL UNIQUE
+              )
+            ''');
+            await db.execute('''
+              CREATE TABLE purchase_receipt_line (
+                id TEXT PRIMARY KEY,
+                purchase_receipt_id TEXT NOT NULL REFERENCES purchase_receipt(id),
+                purchase_order_line_id TEXT REFERENCES purchase_order_line(id),
+                product_id TEXT NOT NULL REFERENCES product(id),
+                quantity_received_milli INTEGER NOT NULL,
+                unit_cost_minor INTEGER NOT NULL,
+                tax_minor INTEGER NOT NULL DEFAULT 0,
+                line_total_minor INTEGER NOT NULL
+              )
+            ''');
+            await db.execute('''
+              CREATE TABLE purchase_return (
+                id TEXT PRIMARY KEY,
+                supplier_id TEXT NOT NULL REFERENCES supplier(id),
+                purchase_receipt_id TEXT REFERENCES purchase_receipt(id),
+                product_id TEXT NOT NULL REFERENCES product(id),
+                quantity_returned_milli INTEGER NOT NULL,
+                credit_minor INTEGER NOT NULL,
+                reason TEXT NOT NULL,
+                returned_at TEXT NOT NULL,
+                idempotency_key TEXT NOT NULL UNIQUE
+              )
+            ''');
+            await db.execute('''
+              CREATE TABLE supplier_ledger_entry (
+                id TEXT PRIMARY KEY,
+                supplier_id TEXT NOT NULL REFERENCES supplier(id),
+                entry_type TEXT NOT NULL,
+                amount_minor INTEGER NOT NULL,
+                source_id TEXT,
+                payment_method TEXT,
                 note TEXT,
                 occurred_at TEXT NOT NULL,
                 idempotency_key TEXT NOT NULL UNIQUE
@@ -639,6 +802,556 @@ class LocalPosDatabase {
       [customerId],
     );
     return (rows.single['count'] as int?) ?? 0;
+  }
+
+  Future<LocalSupplier> addSupplier({
+    required String name,
+    String? mobile,
+    String? gstin,
+  }) async {
+    final trimmedName = name.trim();
+    if (trimmedName.isEmpty) {
+      throw ArgumentError('Supplier name is required');
+    }
+    final now = DateTime.now().toUtc();
+    final supplier = LocalSupplier(
+      id: _uuid.v4(),
+      name: trimmedName,
+      mobile: mobile?.trim().isEmpty ?? true ? null : mobile!.trim(),
+      gstin: gstin?.trim().isEmpty ?? true ? null : gstin!.trim(),
+      balanceMinor: 0,
+    );
+    await _database.insert('supplier', {
+      'id': supplier.id,
+      'name': supplier.name,
+      'mobile_e164': supplier.mobile,
+      'gstin': supplier.gstin,
+      'created_at': now.toIso8601String(),
+      'updated_at': now.toIso8601String(),
+    });
+    return supplier;
+  }
+
+  Future<int> _supplierBalanceMinor(
+    DatabaseExecutor executor,
+    String supplierId,
+  ) async {
+    final rows = await executor.rawQuery(
+      '''
+      SELECT COALESCE(
+        SUM(
+          CASE
+            WHEN entry_type IN ('purchase_charge', 'correction_increase')
+              THEN amount_minor
+            ELSE -amount_minor
+          END
+        ),
+        0
+      ) AS balance_minor
+      FROM supplier_ledger_entry
+      WHERE supplier_id = ?
+      ''',
+      [supplierId],
+    );
+    return rows.single['balance_minor']! as int;
+  }
+
+  Future<List<LocalSupplier>> listSuppliers() async {
+    final rows = await _database.query(
+      'supplier',
+      orderBy: 'name COLLATE NOCASE',
+    );
+    final result = <LocalSupplier>[];
+    for (final row in rows) {
+      final id = row['id']! as String;
+      result.add(
+        LocalSupplier(
+          id: id,
+          name: row['name']! as String,
+          mobile: row['mobile_e164'] as String?,
+          gstin: row['gstin'] as String?,
+          balanceMinor: await _supplierBalanceMinor(_database, id),
+        ),
+      );
+    }
+    return result;
+  }
+
+  Future<String> createPurchaseOrder({
+    required LocalSaleContext context,
+    required String supplierId,
+    required String productId,
+    required int quantityMilli,
+    required int unitCostMinor,
+    int taxMinor = 0,
+    String? note,
+  }) async {
+    final totalMinor = purchaseLineTotalMinor(
+      quantityMilli: quantityMilli,
+      unitCostMinor: unitCostMinor,
+      taxMinor: taxMinor,
+    );
+    final orderId = _uuid.v4();
+    final lineId = _uuid.v4();
+    final idempotencyKey = _uuid.v4();
+    final now = DateTime.now().toUtc();
+    final orderNumber = 'PO-${now.microsecondsSinceEpoch}';
+
+    await _database.transaction((txn) async {
+      final supplierRows = await txn.query(
+        'supplier',
+        columns: ['id'],
+        where: 'id = ?',
+        whereArgs: [supplierId],
+        limit: 1,
+      );
+      final productRows = await txn.query(
+        'product',
+        columns: ['id'],
+        where: 'id = ?',
+        whereArgs: [productId],
+        limit: 1,
+      );
+      if (supplierRows.isEmpty || productRows.isEmpty) {
+        throw StateError('Supplier or product not found');
+      }
+
+      await txn.insert('purchase_order', {
+        'id': orderId,
+        'supplier_id': supplierId,
+        'order_number': orderNumber,
+        'status': 'ordered',
+        'ordered_at': now.toIso8601String(),
+        'note': note?.trim(),
+      });
+      await txn.insert('purchase_order_line', {
+        'id': lineId,
+        'purchase_order_id': orderId,
+        'product_id': productId,
+        'quantity_ordered_milli': quantityMilli,
+        'quantity_received_milli': 0,
+        'unit_cost_minor': unitCostMinor,
+        'tax_minor': taxMinor,
+      });
+      await txn.insert('sync_outbox', {
+        'id': _uuid.v4(),
+        'entity_type': 'purchase_order',
+        'entity_id': orderId,
+        'organization_id': context.organizationId,
+        'business_id': context.businessId,
+        'store_id': context.storeId,
+        'terminal_id': context.terminalId,
+        'idempotency_key': idempotencyKey,
+        'payload_json': jsonEncode({
+          'purchaseOrderId': orderId,
+          'supplierId': supplierId,
+          'orderNumber': orderNumber,
+          'orderedAt': now.toIso8601String(),
+          'note': note?.trim(),
+          'totalMinor': totalMinor,
+          'lines': [
+            {
+              'lineId': lineId,
+              'productId': productId,
+              'quantityOrderedMilli': quantityMilli,
+              'unitCostMinor': unitCostMinor,
+              'taxMinor': taxMinor,
+            }
+          ],
+        }),
+        'state': 'pending',
+        'created_at': now.toIso8601String(),
+      });
+    });
+    return orderId;
+  }
+
+  Future<List<LocalPurchaseOrder>> listPurchaseOrders() async {
+    final rows = await _database.rawQuery(
+      '''
+      SELECT po.*, s.name AS supplier_name
+      FROM purchase_order po
+      INNER JOIN supplier s ON s.id = po.supplier_id
+      ORDER BY po.ordered_at DESC
+      ''',
+    );
+    final result = <LocalPurchaseOrder>[];
+    for (final row in rows) {
+      final orderId = row['id']! as String;
+      final lineRows = await _database.rawQuery(
+        '''
+        SELECT pol.*, p.name AS product_name
+        FROM purchase_order_line pol
+        INNER JOIN product p ON p.id = pol.product_id
+        WHERE pol.purchase_order_id = ?
+        ORDER BY pol.id
+        ''',
+        [orderId],
+      );
+      final lines = lineRows
+          .map(
+            (line) => LocalPurchaseOrderLine(
+              id: line['id']! as String,
+              productId: line['product_id']! as String,
+              productName: line['product_name']! as String,
+              quantityOrderedMilli:
+                  line['quantity_ordered_milli']! as int,
+              quantityReceivedMilli:
+                  line['quantity_received_milli']! as int,
+              unitCostMinor: line['unit_cost_minor']! as int,
+              taxMinor: line['tax_minor']! as int,
+            ),
+          )
+          .toList();
+      result.add(
+        LocalPurchaseOrder(
+          id: orderId,
+          supplierId: row['supplier_id']! as String,
+          supplierName: row['supplier_name']! as String,
+          orderNumber: row['order_number']! as String,
+          status: row['status']! as String,
+          orderedAt: DateTime.parse(row['ordered_at']! as String),
+          totalMinor:
+              lines.fold(0, (sum, line) => sum + line.lineTotalMinor),
+          lines: lines,
+        ),
+      );
+    }
+    return result;
+  }
+
+  Future<String> receivePurchaseOrder({
+    required LocalSaleContext context,
+    required String purchaseOrderId,
+    String? supplierInvoiceNumber,
+  }) async {
+    final receiptId = _uuid.v4();
+    final idempotencyKey = _uuid.v4();
+    final now = DateTime.now().toUtc();
+
+    await _database.transaction((txn) async {
+      final orderRows = await txn.query(
+        'purchase_order',
+        where: 'id = ?',
+        whereArgs: [purchaseOrderId],
+        limit: 1,
+      );
+      if (orderRows.isEmpty) {
+        throw StateError('Purchase order not found');
+      }
+      final order = orderRows.single;
+      final status = order['status']! as String;
+      if (status == 'received' || status == 'cancelled') {
+        throw StateError('Purchase order cannot be received');
+      }
+
+      final supplierId = order['supplier_id']! as String;
+      final lineRows = await txn.query(
+        'purchase_order_line',
+        where: 'purchase_order_id = ?',
+        whereArgs: [purchaseOrderId],
+      );
+      if (lineRows.isEmpty) {
+        throw StateError('Purchase order has no lines');
+      }
+
+      final prepared = <Map<String, Object?>>[];
+      var totalMinor = 0;
+      for (final line in lineRows) {
+        final orderedMilli = line['quantity_ordered_milli']! as int;
+        final alreadyReceived = line['quantity_received_milli']! as int;
+        final remainingMilli = orderedMilli - alreadyReceived;
+        if (remainingMilli <= 0) continue;
+
+        final unitCostMinor = line['unit_cost_minor']! as int;
+        final taxMinor = line['tax_minor']! as int;
+        final lineTotalMinor = purchaseLineTotalMinor(
+          quantityMilli: remainingMilli,
+          unitCostMinor: unitCostMinor,
+          taxMinor: taxMinor,
+        );
+        totalMinor += lineTotalMinor;
+        prepared.add({
+          'purchase_order_line_id': line['id'],
+          'product_id': line['product_id'],
+          'quantity_received_milli': remainingMilli,
+          'quantity_ordered_milli': orderedMilli,
+          'unit_cost_minor': unitCostMinor,
+          'tax_minor': taxMinor,
+          'line_total_minor': lineTotalMinor,
+        });
+      }
+
+      if (prepared.isEmpty || totalMinor <= 0) {
+        throw StateError('Nothing remains to receive');
+      }
+
+      await txn.insert('purchase_receipt', {
+        'id': receiptId,
+        'supplier_id': supplierId,
+        'purchase_order_id': purchaseOrderId,
+        'supplier_invoice_number': supplierInvoiceNumber?.trim().isEmpty ?? true
+            ? null
+            : supplierInvoiceNumber!.trim(),
+        'received_at': now.toIso8601String(),
+        'total_minor': totalMinor,
+        'idempotency_key': idempotencyKey,
+      });
+
+      final receivedLines = <Map<String, Object?>>[];
+      for (final line in prepared) {
+        final productId = line['product_id']! as String;
+        final remainingMilli = line['quantity_received_milli']! as int;
+        final orderedMilli = line['quantity_ordered_milli']! as int;
+
+        await txn.insert('purchase_receipt_line', {
+          'id': _uuid.v4(),
+          'purchase_receipt_id': receiptId,
+          'purchase_order_line_id': line['purchase_order_line_id'],
+          'product_id': productId,
+          'quantity_received_milli': remainingMilli,
+          'unit_cost_minor': line['unit_cost_minor'],
+          'tax_minor': line['tax_minor'],
+          'line_total_minor': line['line_total_minor'],
+        });
+
+        await txn.update(
+          'purchase_order_line',
+          {'quantity_received_milli': orderedMilli},
+          where: 'id = ?',
+          whereArgs: [line['purchase_order_line_id']],
+        );
+
+        await txn.insert('stock_movement', {
+          'id': _uuid.v4(),
+          'product_id': productId,
+          'movement_type': 'receive',
+          'quantity_delta_milli': remainingMilli,
+          'source_entity_type': 'purchase_receipt',
+          'source_entity_id': receiptId,
+          'occurred_at': now.toIso8601String(),
+          'idempotency_key': 'purchase-receipt:$receiptId:$productId',
+        });
+
+        receivedLines.add({
+          'productId': productId,
+          'quantityReceivedMilli': remainingMilli,
+          'unitCostMinor': line['unit_cost_minor'],
+          'taxMinor': line['tax_minor'],
+          'lineTotalMinor': line['line_total_minor'],
+        });
+      }
+
+      await txn.insert('supplier_ledger_entry', {
+        'id': _uuid.v4(),
+        'supplier_id': supplierId,
+        'entry_type': 'purchase_charge',
+        'amount_minor': totalMinor,
+        'source_id': receiptId,
+        'occurred_at': now.toIso8601String(),
+        'idempotency_key': 'supplier-charge:$receiptId',
+      });
+
+      await txn.update(
+        'purchase_order',
+        {'status': 'received'},
+        where: 'id = ?',
+        whereArgs: [purchaseOrderId],
+      );
+
+      await txn.insert('sync_outbox', {
+        'id': _uuid.v4(),
+        'entity_type': 'purchase_receipt',
+        'entity_id': receiptId,
+        'organization_id': context.organizationId,
+        'business_id': context.businessId,
+        'store_id': context.storeId,
+        'terminal_id': context.terminalId,
+        'idempotency_key': idempotencyKey,
+        'payload_json': jsonEncode({
+          'purchaseReceiptId': receiptId,
+          'purchaseOrderId': purchaseOrderId,
+          'supplierId': supplierId,
+          'supplierInvoiceNumber': supplierInvoiceNumber?.trim(),
+          'receivedAt': now.toIso8601String(),
+          'totalMinor': totalMinor,
+          'lines': receivedLines,
+        }),
+        'state': 'pending',
+        'created_at': now.toIso8601String(),
+      });
+    });
+    return receiptId;
+  }
+
+  Future<String> recordPurchaseReturn({
+    required LocalSaleContext context,
+    required String supplierId,
+    required String productId,
+    required int quantityMilli,
+    required int creditMinor,
+    required String reason,
+    String? purchaseReceiptId,
+  }) async {
+    if (quantityMilli <= 0 || creditMinor <= 0 || reason.trim().isEmpty) {
+      throw ArgumentError('Invalid purchase return');
+    }
+    final returnId = _uuid.v4();
+    final idempotencyKey = _uuid.v4();
+    final now = DateTime.now().toUtc();
+
+    await _database.transaction((txn) async {
+      final stockRows = await txn.rawQuery(
+        '''
+        SELECT COALESCE(SUM(quantity_delta_milli), 0) AS on_hand_milli
+        FROM stock_movement
+        WHERE product_id = ?
+        ''',
+        [productId],
+      );
+      final onHand = stockRows.single['on_hand_milli']! as int;
+      if (quantityMilli > onHand) {
+        throw StateError('Purchase return exceeds available stock');
+      }
+
+      await txn.insert('purchase_return', {
+        'id': returnId,
+        'supplier_id': supplierId,
+        'purchase_receipt_id': purchaseReceiptId,
+        'product_id': productId,
+        'quantity_returned_milli': quantityMilli,
+        'credit_minor': creditMinor,
+        'reason': reason.trim(),
+        'returned_at': now.toIso8601String(),
+        'idempotency_key': idempotencyKey,
+      });
+
+      await txn.insert('stock_movement', {
+        'id': _uuid.v4(),
+        'product_id': productId,
+        'movement_type': 'purchase_return',
+        'quantity_delta_milli': -quantityMilli,
+        'reason': reason.trim(),
+        'source_entity_type': 'purchase_return',
+        'source_entity_id': returnId,
+        'occurred_at': now.toIso8601String(),
+        'idempotency_key': 'purchase-return:$returnId:$productId',
+      });
+
+      await txn.insert('supplier_ledger_entry', {
+        'id': _uuid.v4(),
+        'supplier_id': supplierId,
+        'entry_type': 'purchase_return_credit',
+        'amount_minor': creditMinor,
+        'source_id': returnId,
+        'note': reason.trim(),
+        'occurred_at': now.toIso8601String(),
+        'idempotency_key': 'supplier-return:$returnId',
+      });
+
+      await txn.insert('sync_outbox', {
+        'id': _uuid.v4(),
+        'entity_type': 'purchase_return',
+        'entity_id': returnId,
+        'organization_id': context.organizationId,
+        'business_id': context.businessId,
+        'store_id': context.storeId,
+        'terminal_id': context.terminalId,
+        'idempotency_key': idempotencyKey,
+        'payload_json': jsonEncode({
+          'purchaseReturnId': returnId,
+          'supplierId': supplierId,
+          'purchaseReceiptId': purchaseReceiptId,
+          'productId': productId,
+          'quantityReturnedMilli': quantityMilli,
+          'creditMinor': creditMinor,
+          'reason': reason.trim(),
+          'returnedAt': now.toIso8601String(),
+        }),
+        'state': 'pending',
+        'created_at': now.toIso8601String(),
+      });
+    });
+    return returnId;
+  }
+
+  Future<void> paySupplier({
+    required LocalSaleContext context,
+    required String supplierId,
+    required int amountMinor,
+    String paymentMethod = 'cash',
+    String? note,
+  }) {
+    if (amountMinor <= 0) {
+      throw ArgumentError('Supplier payment must be positive');
+    }
+    if (!{'cash', 'upi', 'card', 'bank'}.contains(paymentMethod)) {
+      throw ArgumentError('Unsupported supplier payment method');
+    }
+
+    return _database.transaction((txn) async {
+      final balance = await _supplierBalanceMinor(txn, supplierId);
+      if (balance <= 0 || amountMinor > balance) {
+        throw StateError('Supplier payment exceeds payable balance');
+      }
+
+      final entryId = _uuid.v4();
+      final idempotencyKey = _uuid.v4();
+      final now = DateTime.now().toUtc();
+      await txn.insert('supplier_ledger_entry', {
+        'id': entryId,
+        'supplier_id': supplierId,
+        'entry_type': 'payment',
+        'amount_minor': amountMinor,
+        'payment_method': paymentMethod,
+        'note': note?.trim(),
+        'occurred_at': now.toIso8601String(),
+        'idempotency_key': idempotencyKey,
+      });
+      await txn.insert('sync_outbox', {
+        'id': _uuid.v4(),
+        'entity_type': 'supplier_ledger_entry',
+        'entity_id': entryId,
+        'organization_id': context.organizationId,
+        'business_id': context.businessId,
+        'store_id': context.storeId,
+        'terminal_id': context.terminalId,
+        'idempotency_key': idempotencyKey,
+        'payload_json': jsonEncode({
+          'entryId': entryId,
+          'supplierId': supplierId,
+          'entryType': 'payment',
+          'amountMinor': amountMinor,
+          'paymentMethod': paymentMethod,
+          'note': note?.trim(),
+          'occurredAt': now.toIso8601String(),
+        }),
+        'state': 'pending',
+        'created_at': now.toIso8601String(),
+      });
+    });
+  }
+
+  Future<List<SupplierLedgerEntry>> supplierLedgerEntries(
+    String supplierId,
+  ) async {
+    final rows = await _database.query(
+      'supplier_ledger_entry',
+      where: 'supplier_id = ?',
+      whereArgs: [supplierId],
+      orderBy: 'occurred_at, id',
+    );
+    return rows
+        .map(
+          (row) => SupplierLedgerEntry(
+            id: row['id']! as String,
+            type: row['entry_type']! as String,
+            amountMinor: row['amount_minor']! as int,
+            occurredAt: DateTime.parse(row['occurred_at']! as String),
+            note: row['note'] as String?,
+          ),
+        )
+        .toList();
   }
 
   Future<int> pendingOutboxCount() async {

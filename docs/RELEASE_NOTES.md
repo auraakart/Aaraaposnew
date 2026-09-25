@@ -1,5 +1,11 @@
 # Release Notes
 
+## V1.4 Purchases & Suppliers — validation
+
+Added suppliers, purchase orders, receive-to-stock workflow, purchase returns, supplier payable/credit ledger, bounded supplier payments, Purchases UI, tenant-safe server schema and regression tests.
+
+Not claimed: external supplier messaging, real payment providers, OCR, partial-receipt UI or production-authenticated synchronization.
+
 ## V1.3 Customers & Credit — validation
 
 Added optional customer association, Customers navigation, Customer Credit / Pay Later checkout, immutable credit charges, partial cash collection, due dates, overdue/balance summaries, statement history, tenant-safe server schema and regression tests.
@@ -44,6 +50,7 @@ Not claimed:
 - tax filing gateways or regulatory certification
 - physical hardware certification
 - production credentials, hosting or deployment
+
 
 
 

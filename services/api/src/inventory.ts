@@ -7,7 +7,8 @@ export type StockMovementType =
   | "damage"
   | "loss"
   | "transfer_in"
-  | "transfer_out";
+  | "transfer_out"
+  | "purchase_return";
 
 export interface StockMovement {
   id: string;
@@ -40,7 +41,8 @@ export function validateStockMovement(movement: StockMovement): void {
     "sale",
     "damage",
     "loss",
-    "transfer_out"
+    "transfer_out",
+    "purchase_return"
   ]);
 
   if (shouldBePositive.has(movement.type) && movement.quantityDeltaMilli <= 0) {
