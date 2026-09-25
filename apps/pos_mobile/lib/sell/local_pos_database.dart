@@ -6,6 +6,7 @@ import 'package:uuid/uuid.dart';
 
 import '../customers/customer_domain.dart';
 import '../inventory/inventory_domain.dart';
+import '../operations/operations_domain.dart';
 import '../purchases/purchase_domain.dart';
 import 'sale_domain.dart';
 
@@ -83,7 +84,7 @@ class LocalPosDatabase {
     _db = await _factory.openDatabase(
       path,
       options: OpenDatabaseOptions(
-        version: 5,
+        version: 6,
         onConfigure: (db) async {
           await db.execute('PRAGMA foreign_keys = ON');
         },
@@ -140,6 +141,7 @@ class LocalPosDatabase {
               terminal_id TEXT NOT NULL,
               cashier_user_id TEXT NOT NULL,
               customer_id TEXT REFERENCES customer(id),
+              shift_id TEXT REFERENCES shift(id),
               invoice_number TEXT NOT NULL UNIQUE,
               local_created_at TEXT NOT NULL,
               subtotal_minor INTEGER NOT NULL,
@@ -203,6 +205,7 @@ class LocalPosDatabase {
               sale_id TEXT REFERENCES sale(id),
               collection_method TEXT,
               due_date TEXT,
+              shift_id TEXT REFERENCES shift(id),
               note TEXT,
               occurred_at TEXT NOT NULL,
               idempotency_key TEXT NOT NULL UNIQUE
@@ -286,6 +289,71 @@ class LocalPosDatabase {
               note TEXT,
               occurred_at TEXT NOT NULL,
               idempotency_key TEXT NOT NULL UNIQUE
+            )
+          ''');
+          await db.execute('''
+            CREATE TABLE employee (
+              id TEXT PRIMARY KEY,
+              name TEXT NOT NULL,
+              mobile_e164 TEXT,
+              role TEXT NOT NULL,
+              active INTEGER NOT NULL DEFAULT 1,
+              created_at TEXT NOT NULL
+            )
+          ''');
+          await db.execute('''
+            CREATE TABLE shift (
+              id TEXT PRIMARY KEY,
+              employee_id TEXT NOT NULL REFERENCES employee(id),
+              opened_at TEXT NOT NULL,
+              opening_cash_minor INTEGER NOT NULL,
+              closed_at TEXT,
+              expected_closing_cash_minor INTEGER,
+              actual_closing_cash_minor INTEGER,
+              variance_minor INTEGER,
+              status TEXT NOT NULL
+            )
+          ''');
+          await db.execute('''
+            CREATE UNIQUE INDEX shift_one_open_idx
+            ON shift(status)
+            WHERE status = 'open'
+          ''');
+          await db.execute('''
+            CREATE TABLE cash_movement (
+              id TEXT PRIMARY KEY,
+              shift_id TEXT NOT NULL REFERENCES shift(id),
+              movement_type TEXT NOT NULL,
+              amount_minor INTEGER NOT NULL,
+              reason TEXT NOT NULL,
+              occurred_at TEXT NOT NULL,
+              idempotency_key TEXT NOT NULL UNIQUE
+            )
+          ''');
+          await db.execute('''
+            CREATE TABLE expense (
+              id TEXT PRIMARY KEY,
+              shift_id TEXT REFERENCES shift(id),
+              category TEXT NOT NULL,
+              amount_minor INTEGER NOT NULL,
+              payment_method TEXT NOT NULL,
+              note TEXT,
+              occurred_at TEXT NOT NULL,
+              idempotency_key TEXT NOT NULL UNIQUE
+            )
+          ''');
+          await db.execute('''
+            CREATE TABLE approval_request (
+              id TEXT PRIMARY KEY,
+              action_type TEXT NOT NULL,
+              entity_type TEXT NOT NULL,
+              entity_id TEXT NOT NULL,
+              requested_by_employee_id TEXT NOT NULL REFERENCES employee(id),
+              requested_at TEXT NOT NULL,
+              status TEXT NOT NULL,
+              resolved_by_employee_id TEXT REFERENCES employee(id),
+              resolved_at TEXT,
+              reason TEXT
             )
           ''');
           await db.execute('''
@@ -474,6 +542,87 @@ class LocalPosDatabase {
               )
             ''');
           }
+          if (oldVersion < 6) {
+            await db.execute('''
+              CREATE TABLE employee (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                mobile_e164 TEXT,
+                role TEXT NOT NULL,
+                active INTEGER NOT NULL DEFAULT 1,
+                created_at TEXT NOT NULL
+              )
+            ''');
+            await db.execute('''
+              CREATE TABLE shift (
+                id TEXT PRIMARY KEY,
+                employee_id TEXT NOT NULL REFERENCES employee(id),
+                opened_at TEXT NOT NULL,
+                opening_cash_minor INTEGER NOT NULL,
+                closed_at TEXT,
+                expected_closing_cash_minor INTEGER,
+                actual_closing_cash_minor INTEGER,
+                variance_minor INTEGER,
+                status TEXT NOT NULL
+              )
+            ''');
+            await db.execute('''
+              CREATE UNIQUE INDEX shift_one_open_idx
+              ON shift(status)
+              WHERE status = 'open'
+            ''');
+            await db.execute('''
+              CREATE TABLE cash_movement (
+                id TEXT PRIMARY KEY,
+                shift_id TEXT NOT NULL REFERENCES shift(id),
+                movement_type TEXT NOT NULL,
+                amount_minor INTEGER NOT NULL,
+                reason TEXT NOT NULL,
+                occurred_at TEXT NOT NULL,
+                idempotency_key TEXT NOT NULL UNIQUE
+              )
+            ''');
+            await db.execute('''
+              CREATE TABLE expense (
+                id TEXT PRIMARY KEY,
+                shift_id TEXT REFERENCES shift(id),
+                category TEXT NOT NULL,
+                amount_minor INTEGER NOT NULL,
+                payment_method TEXT NOT NULL,
+                note TEXT,
+                occurred_at TEXT NOT NULL,
+                idempotency_key TEXT NOT NULL UNIQUE
+              )
+            ''');
+            await db.execute('''
+              CREATE TABLE approval_request (
+                id TEXT PRIMARY KEY,
+                action_type TEXT NOT NULL,
+                entity_type TEXT NOT NULL,
+                entity_id TEXT NOT NULL,
+                requested_by_employee_id TEXT NOT NULL REFERENCES employee(id),
+                requested_at TEXT NOT NULL,
+                status TEXT NOT NULL,
+                resolved_by_employee_id TEXT REFERENCES employee(id),
+                resolved_at TEXT,
+                reason TEXT
+              )
+            ''');
+            await db.execute(
+              "ALTER TABLE sale ADD COLUMN shift_id TEXT REFERENCES shift(id)",
+            );
+            await db.execute(
+              "ALTER TABLE customer_credit_entry ADD COLUMN shift_id TEXT REFERENCES shift(id)",
+            );
+            await db.execute('''
+              INSERT OR IGNORE INTO employee (
+                id, name, role, active, created_at
+              )
+              SELECT user_id, 'Owner', 'owner', 1, CURRENT_TIMESTAMP
+              FROM local_context
+              WHERE singleton_id = 1
+            ''');
+          }
         },
       ),
     );
@@ -547,6 +696,13 @@ class LocalPosDatabase {
       await txn.insert('terminal_sequence', {
         'terminal_code': context.terminalCode,
         'next_invoice': 1,
+      });
+      await txn.insert('employee', {
+        'id': context.userId,
+        'name': 'Owner',
+        'role': 'owner',
+        'active': 1,
+        'created_at': DateTime.now().toUtc().toIso8601String(),
       });
     });
 
