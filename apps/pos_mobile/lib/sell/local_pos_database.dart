@@ -11,6 +11,7 @@ import '../inventory/inventory_domain.dart';
 import '../loyalty/loyalty_domain.dart';
 import '../operations/operations_domain.dart';
 import '../purchases/purchase_domain.dart';
+import '../sync/sync_domain.dart';
 import 'return_domain.dart';
 import 'sale_domain.dart';
 
@@ -90,7 +91,7 @@ class LocalPosDatabase {
     _db = await _factory.openDatabase(
       path,
       options: OpenDatabaseOptions(
-        version: 8,
+        version: 9,
         onConfigure: (db) async {
           await db.execute('PRAGMA foreign_keys = ON');
         },
@@ -517,8 +518,11 @@ class LocalPosDatabase {
               terminal_id TEXT NOT NULL,
               idempotency_key TEXT NOT NULL UNIQUE,
               payload_json TEXT NOT NULL,
+              schema_version INTEGER NOT NULL DEFAULT 1,
               state TEXT NOT NULL,
               created_at TEXT NOT NULL,
+              attempt_count INTEGER NOT NULL DEFAULT 0,
+              last_attempt_at TEXT,
               last_error TEXT
             )
           ''');
@@ -914,6 +918,17 @@ class LocalPosDatabase {
               'max_redemption_bps': 2000,
               'updated_at': DateTime.now().toUtc().toIso8601String(),
             });
+          }
+          if (oldVersion < 9) {
+            await db.execute(
+              "ALTER TABLE sync_outbox ADD COLUMN schema_version INTEGER NOT NULL DEFAULT 1",
+            );
+            await db.execute(
+              "ALTER TABLE sync_outbox ADD COLUMN attempt_count INTEGER NOT NULL DEFAULT 0",
+            );
+            await db.execute(
+              "ALTER TABLE sync_outbox ADD COLUMN last_attempt_at TEXT",
+            );
           }
         },
       ),
@@ -4128,6 +4143,142 @@ class LocalPosDatabase {
       [saleId],
     );
     return rows.single['count']! as int;
+  }
+
+  Future<List<LocalOutboxItem>> listOutboxItems({
+    bool unresolvedOnly = true,
+    int limit = 100,
+  }) async {
+    final rows = await _database.query(
+      'sync_outbox',
+      where: unresolvedOnly
+          ? "state IN ('pending', 'sending', 'conflict', 'rejected')"
+          : null,
+      orderBy: 'created_at DESC',
+      limit: limit,
+    );
+    return rows
+        .map(
+          (row) => LocalOutboxItem(
+            id: row['id']! as String,
+            entityType: row['entity_type']! as String,
+            entityId: row['entity_id']! as String,
+            idempotencyKey: row['idempotency_key']! as String,
+            schemaVersion: row['schema_version']! as int,
+            state: localSyncStateFromValue(row['state']! as String),
+            createdAt: DateTime.parse(row['created_at']! as String),
+            attemptCount: row['attempt_count']! as int,
+            lastAttemptAt: row['last_attempt_at'] == null
+                ? null
+                : DateTime.parse(row['last_attempt_at']! as String),
+            serverMessage: row['last_error'] as String?,
+          ),
+        )
+        .toList();
+  }
+
+  Future<void> markOutboxSending(String id) async {
+    final rows = await _database.query(
+      'sync_outbox',
+      columns: ['state', 'attempt_count'],
+      where: 'id = ?',
+      whereArgs: [id],
+      limit: 1,
+    );
+    if (rows.isEmpty) throw StateError('Outbox item not found');
+    final current = localSyncStateFromValue(rows.single['state']! as String);
+    final next = nextLocalSyncState(current, 'send');
+    await _database.update(
+      'sync_outbox',
+      {
+        'state': localSyncStateValue(next),
+        'attempt_count': (rows.single['attempt_count']! as int) + 1,
+        'last_attempt_at': DateTime.now().toUtc().toIso8601String(),
+        'last_error': null,
+      },
+      where: 'id = ?',
+      whereArgs: [id],
+    );
+  }
+
+  Future<void> applySyncAcknowledgement(
+    LocalSyncAcknowledgement acknowledgement,
+  ) async {
+    if (acknowledgement.state != LocalSyncState.acknowledged &&
+        acknowledgement.state != LocalSyncState.conflict &&
+        acknowledgement.state != LocalSyncState.rejected) {
+      throw ArgumentError('Acknowledgement must be terminal');
+    }
+
+    final rows = await _database.query(
+      'sync_outbox',
+      columns: ['id', 'entity_id', 'state'],
+      where: 'idempotency_key = ?',
+      whereArgs: [acknowledgement.idempotencyKey],
+      limit: 1,
+    );
+    if (rows.isEmpty) throw StateError('Outbox item not found');
+    if (rows.single['entity_id'] != acknowledgement.entityId) {
+      throw StateError('Acknowledgement entity does not match outbox item');
+    }
+
+    final current = localSyncStateFromValue(rows.single['state']! as String);
+    final event = switch (acknowledgement.state) {
+      LocalSyncState.acknowledged => 'acknowledge',
+      LocalSyncState.conflict => 'conflict',
+      LocalSyncState.rejected => 'reject',
+      _ => throw StateError('Unexpected acknowledgement state'),
+    };
+    final next = nextLocalSyncState(current, event);
+    await _database.update(
+      'sync_outbox',
+      {
+        'state': localSyncStateValue(next),
+        'last_error': acknowledgement.message ?? acknowledgement.code,
+      },
+      where: 'id = ?',
+      whereArgs: [rows.single['id']],
+    );
+  }
+
+  Future<void> retryOutbox(String id) async {
+    final rows = await _database.query(
+      'sync_outbox',
+      columns: ['state'],
+      where: 'id = ?',
+      whereArgs: [id],
+      limit: 1,
+    );
+    if (rows.isEmpty) throw StateError('Outbox item not found');
+    final current = localSyncStateFromValue(rows.single['state']! as String);
+    final next = nextLocalSyncState(current, 'retry');
+    await _database.update(
+      'sync_outbox',
+      {
+        'state': localSyncStateValue(next),
+        'last_error': null,
+      },
+      where: 'id = ?',
+      whereArgs: [id],
+    );
+  }
+
+  Future<Map<LocalSyncState, int>> outboxStateCounts() async {
+    final rows = await _database.rawQuery(
+      '''
+      SELECT state, COUNT(*) AS count
+      FROM sync_outbox
+      GROUP BY state
+      ''',
+    );
+    final result = {
+      for (final state in LocalSyncState.values) state: 0,
+    };
+    for (final row in rows) {
+      result[localSyncStateFromValue(row['state']! as String)] =
+          row['count']! as int;
+    }
+    return result;
   }
 
   Future<int> pendingOutboxCount() async {
