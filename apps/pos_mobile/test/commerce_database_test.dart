@@ -111,8 +111,8 @@ void main() {
       tenderedMinor: 6000,
     );
 
-    expect(
-      () => database.completeCommerceOrder(
+    await expectLater(
+      database.completeCommerceOrder(
         context: context,
         orderId: orderId,
         saleId: sale.saleId,
