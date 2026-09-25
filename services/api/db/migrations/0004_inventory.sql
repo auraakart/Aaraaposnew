@@ -26,6 +26,15 @@ CREATE TABLE stock_movement (
     ),
   quantity_delta_milli bigint NOT NULL
     CHECK (quantity_delta_milli <> 0),
+  CHECK (
+    (movement_type IN ('opening', 'receive', 'return_in', 'transfer_in')
+      AND quantity_delta_milli > 0)
+    OR
+    (movement_type IN ('sale', 'damage', 'loss', 'transfer_out')
+      AND quantity_delta_milli < 0)
+    OR
+    movement_type = 'adjustment'
+  ),
   reason text,
   source_entity_type text,
   source_entity_id uuid,
@@ -38,6 +47,11 @@ CREATE TABLE stock_movement (
   CHECK (
     movement_type NOT IN ('adjustment', 'damage', 'loss')
     OR NULLIF(btrim(reason), '') IS NOT NULL
+  ),
+  CHECK (
+    (source_entity_type IS NULL AND source_entity_id IS NULL)
+    OR
+    (source_entity_type IS NOT NULL AND source_entity_id IS NOT NULL)
   )
 );
 
@@ -52,7 +66,8 @@ CREATE POLICY stock_movement_tenant_isolation ON stock_movement
       NULLIF(current_setting('app.organization_id', true), '')::uuid
   );
 
-CREATE VIEW stock_on_hand AS
+CREATE VIEW stock_on_hand
+WITH (security_invoker = true) AS
 SELECT
   organization_id,
   business_id,
