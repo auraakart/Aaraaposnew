@@ -72,8 +72,8 @@ void main() {
       unitPriceMinor: 5000,
     );
 
-    expect(
-      () => database.recordStockMovement(
+    await expectLater(
+      database.recordStockMovement(
         context: context,
         productId: product.id,
         type: StockMovementType.damage,
