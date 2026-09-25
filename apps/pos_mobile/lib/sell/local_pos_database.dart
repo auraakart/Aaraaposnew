@@ -4108,6 +4108,22 @@ class LocalPosDatabase {
     return rows.single['count']! as int;
   }
 
+  Future<int> loyaltyEntryCountForCustomer(String customerId) async {
+    final rows = await _database.rawQuery(
+      'SELECT COUNT(*) AS count FROM customer_loyalty_entry WHERE customer_id = ?',
+      [customerId],
+    );
+    return rows.single['count']! as int;
+  }
+
+  Future<int> promotionRedemptionCountForSale(String saleId) async {
+    final rows = await _database.rawQuery(
+      'SELECT COUNT(*) AS count FROM promotion_redemption WHERE sale_id = ?',
+      [saleId],
+    );
+    return rows.single['count']! as int;
+  }
+
   Future<int> pendingOutboxCount() async {
     final rows = await _database.rawQuery(
       "SELECT COUNT(*) AS count FROM sync_outbox WHERE state = 'pending'",
