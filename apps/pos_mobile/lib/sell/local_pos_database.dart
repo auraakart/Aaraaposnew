@@ -4,6 +4,7 @@ import 'package:path/path.dart' as p;
 import 'package:sqflite/sqflite.dart';
 import 'package:uuid/uuid.dart';
 
+import '../inventory/inventory_domain.dart';
 import 'sale_domain.dart';
 
 class LocalSaleContext {
@@ -80,7 +81,7 @@ class LocalPosDatabase {
     _db = await _factory.openDatabase(
       path,
       options: OpenDatabaseOptions(
-        version: 2,
+        version: 3,
         onCreate: (db, version) async {
           await db.execute('''
             CREATE TABLE local_context (
@@ -104,6 +105,7 @@ class LocalPosDatabase {
               unit_price_minor INTEGER NOT NULL CHECK (unit_price_minor >= 0),
               tax_rate_bps INTEGER NOT NULL CHECK (tax_rate_bps BETWEEN 0 AND 10000),
               tax_price_mode TEXT NOT NULL,
+              reorder_level_milli INTEGER NOT NULL DEFAULT 0,
               active INTEGER NOT NULL DEFAULT 1,
               UNIQUE (barcode)
             )
@@ -177,6 +179,19 @@ class LocalPosDatabase {
             )
           ''');
           await db.execute('''
+            CREATE TABLE stock_movement (
+              id TEXT PRIMARY KEY,
+              product_id TEXT NOT NULL REFERENCES product(id),
+              movement_type TEXT NOT NULL,
+              quantity_delta_milli INTEGER NOT NULL,
+              reason TEXT,
+              source_entity_type TEXT,
+              source_entity_id TEXT,
+              occurred_at TEXT NOT NULL,
+              idempotency_key TEXT NOT NULL UNIQUE
+            )
+          ''');
+          await db.execute('''
             CREATE TABLE sync_outbox (
               id TEXT PRIMARY KEY,
               entity_type TEXT NOT NULL,
@@ -217,6 +232,24 @@ class LocalPosDatabase {
                 amount_minor INTEGER NOT NULL,
                 occurred_at TEXT NOT NULL,
                 metadata_json TEXT NOT NULL DEFAULT '{}'
+              )
+            ''');
+          }
+          if (oldVersion < 3) {
+            await db.execute(
+              "ALTER TABLE product ADD COLUMN reorder_level_milli INTEGER NOT NULL DEFAULT 0",
+            );
+            await db.execute('''
+              CREATE TABLE stock_movement (
+                id TEXT PRIMARY KEY,
+                product_id TEXT NOT NULL REFERENCES product(id),
+                movement_type TEXT NOT NULL,
+                quantity_delta_milli INTEGER NOT NULL,
+                reason TEXT,
+                source_entity_type TEXT,
+                source_entity_id TEXT,
+                occurred_at TEXT NOT NULL,
+                idempotency_key TEXT NOT NULL UNIQUE
               )
             ''');
           }
@@ -336,12 +369,14 @@ class LocalPosDatabase {
     String? barcode,
     int taxRateBps = 0,
     TaxPriceMode taxPriceMode = TaxPriceMode.inclusive,
+    int reorderLevelMilli = 0,
   }) async {
     final trimmed = name.trim();
     if (trimmed.isEmpty ||
         unitPriceMinor < 0 ||
         taxRateBps < 0 ||
-        taxRateBps > 10000) {
+        taxRateBps > 10000 ||
+        reorderLevelMilli < 0) {
       throw ArgumentError('Invalid product');
     }
     final product = Product(
@@ -361,6 +396,7 @@ class LocalPosDatabase {
       'tax_price_mode': product.taxPriceMode == TaxPriceMode.exclusive
           ? 'exclusive'
           : 'inclusive',
+      'reorder_level_milli': reorderLevelMilli,
       'active': 1,
     });
     return product;
@@ -384,6 +420,129 @@ class LocalPosDatabase {
       [saleId],
     );
     return (rows.single['count'] as int?) ?? 0;
+  }
+
+  Future<List<LocalInventoryItem>> listInventory() async {
+    final rows = await _database.rawQuery('''
+      SELECT
+        p.id,
+        p.name,
+        p.barcode,
+        p.reorder_level_milli,
+        COALESCE(SUM(sm.quantity_delta_milli), 0) AS on_hand_milli
+      FROM product p
+      LEFT JOIN stock_movement sm ON sm.product_id = p.id
+      WHERE p.active = 1
+      GROUP BY p.id, p.name, p.barcode, p.reorder_level_milli
+      ORDER BY p.name COLLATE NOCASE
+    ''');
+    return rows
+        .map(
+          (row) => LocalInventoryItem(
+            productId: row['id']! as String,
+            name: row['name']! as String,
+            barcode: row['barcode'] as String?,
+            onHandMilli: row['on_hand_milli']! as int,
+            reorderLevelMilli: row['reorder_level_milli']! as int,
+          ),
+        )
+        .toList();
+  }
+
+  Future<void> setReorderLevel({
+    required String productId,
+    required int reorderLevelMilli,
+  }) async {
+    if (reorderLevelMilli < 0) {
+      throw ArgumentError('Reorder level cannot be negative');
+    }
+    await _database.update(
+      'product',
+      {'reorder_level_milli': reorderLevelMilli},
+      where: 'id = ?',
+      whereArgs: [productId],
+    );
+  }
+
+  Future<String?> recordStockMovement({
+    required LocalSaleContext context,
+    required String productId,
+    required StockMovementType type,
+    required int quantityDeltaMilli,
+    String? reason,
+  }) async {
+    validateStockMovement(
+      type: type,
+      quantityDeltaMilli: quantityDeltaMilli,
+      reason: reason,
+    );
+    final movementId = _uuid.v4();
+    final idempotencyKey = _uuid.v4();
+    final now = DateTime.now().toUtc();
+
+    await _database.transaction((txn) async {
+      await txn.insert('stock_movement', {
+        'id': movementId,
+        'product_id': productId,
+        'movement_type': stockMovementTypeValue(type),
+        'quantity_delta_milli': quantityDeltaMilli,
+        'reason': reason?.trim(),
+        'occurred_at': now.toIso8601String(),
+        'idempotency_key': idempotencyKey,
+      });
+      await txn.insert('sync_outbox', {
+        'id': _uuid.v4(),
+        'entity_type': 'stock_movement',
+        'entity_id': movementId,
+        'organization_id': context.organizationId,
+        'business_id': context.businessId,
+        'store_id': context.storeId,
+        'terminal_id': context.terminalId,
+        'idempotency_key': idempotencyKey,
+        'payload_json': jsonEncode({
+          'movementId': movementId,
+          'productId': productId,
+          'movementType': stockMovementTypeValue(type),
+          'quantityDeltaMilli': quantityDeltaMilli,
+          'reason': reason?.trim(),
+          'occurredAt': now.toIso8601String(),
+        }),
+        'state': 'pending',
+        'created_at': now.toIso8601String(),
+      });
+    });
+    return movementId;
+  }
+
+  Future<String?> countStock({
+    required LocalSaleContext context,
+    required String productId,
+    required int countedMilli,
+    required String reason,
+  }) async {
+    final rows = await _database.rawQuery(
+      '''
+      SELECT COALESCE(SUM(quantity_delta_milli), 0) AS on_hand_milli
+      FROM stock_movement
+      WHERE product_id = ?
+      ''',
+      [productId],
+    );
+    final current = rows.single['on_hand_milli']! as int;
+    final delta = countAdjustmentDelta(
+      currentOnHandMilli: current,
+      countedMilli: countedMilli,
+    );
+    if (delta == 0) {
+      return null;
+    }
+    return recordStockMovement(
+      context: context,
+      productId: productId,
+      type: StockMovementType.adjustment,
+      quantityDeltaMilli: delta,
+      reason: reason,
+    );
   }
 
   Future<OfflineSaleResult> finalizeCashSale({
@@ -450,6 +609,16 @@ class LocalPosDatabase {
           'igst_minor': line.igstMinor,
           'tax_minor': line.taxMinor,
           'total_minor': line.totalMinor,
+        });
+        await txn.insert('stock_movement', {
+          'id': _uuid.v4(),
+          'product_id': line.product.id,
+          'movement_type': 'sale',
+          'quantity_delta_milli': -line.quantityMilli,
+          'source_entity_type': 'sale',
+          'source_entity_id': saleId,
+          'occurred_at': now.toIso8601String(),
+          'idempotency_key': 'sale:$saleId:${line.product.id}',
         });
       }
 
