@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../customers/customer_domain.dart';
+import '../loyalty/loyalty_domain.dart';
 import '../payments/payment_domain.dart';
 import '../payments/payment_method_sheet.dart';
 import 'barcode_scanner_screen.dart';
@@ -88,9 +89,12 @@ class _SellScreenState extends State<SellScreen> {
     return priceSale(lines, widget.saleContext.taxMode);
   }
 
-  void _clearPromotionDiscountsInState() {
+  void _clearDynamicDiscountsInState() {
     final promoted = discountSources.entries
-        .where((entry) => entry.value == 'promotion')
+        .where(
+          (entry) =>
+              entry.value == 'promotion' || entry.value == 'loyalty',
+        )
         .map((entry) => entry.key)
         .toList();
     for (final productId in promoted) {
@@ -105,7 +109,7 @@ class _SellScreenState extends State<SellScreen> {
 
   void add(Product product) {
     setState(() {
-      _clearPromotionDiscountsInState();
+      _clearDynamicDiscountsInState();
       cartProducts[product.id] = product;
       quantitiesMilli.update(
         product.id,
@@ -117,7 +121,7 @@ class _SellScreenState extends State<SellScreen> {
 
   void removeOne(Product product) {
     setState(() {
-      _clearPromotionDiscountsInState();
+      _clearDynamicDiscountsInState();
       final next = (quantitiesMilli[product.id] ?? 0) - 1000;
       if (next <= 0) {
         quantitiesMilli.remove(product.id);
@@ -314,7 +318,7 @@ class _SellScreenState extends State<SellScreen> {
     controller.dispose();
     if (result == null || !mounted) return;
     setState(() {
-      _clearPromotionDiscountsInState();
+      _clearDynamicDiscountsInState();
       if (result == 0) {
         discountsMinor.remove(product.id);
         discountSources.remove(product.id);
@@ -323,7 +327,144 @@ class _SellScreenState extends State<SellScreen> {
         discountsMinor[product.id] = result;
         discountSources[product.id] = 'manual';
         discountReferences.remove(product.id);
+        appliedPromotionName = null;
       }
+    });
+  }
+
+  Future<void> redeemLoyalty() async {
+    final customer = selectedCustomer;
+    final saleTotals = totals;
+    if (customer == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Choose a customer to use loyalty points.')),
+      );
+      return;
+    }
+    if (saleTotals == null) return;
+    if (discountsMinor.values.any((value) => value > 0)) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Loyalty points cannot be stacked with another discount.'),
+        ),
+      );
+      return;
+    }
+    if (cartProducts.values.any(
+      (product) => product.taxPriceMode != TaxPriceMode.inclusive,
+    )) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Loyalty redemption is currently available only for tax-inclusive items.',
+          ),
+        ),
+      );
+      return;
+    }
+
+    final program = await widget.database.loyaltyProgram();
+    final balance = await widget.database.customerLoyaltyBalance(customer.id);
+    if (!mounted) return;
+    if (!program.enabled || balance <= 0) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('No loyalty points are available to use.')),
+      );
+      return;
+    }
+
+    final maximum = maxLoyaltyRedemption(
+      saleMinor: saleTotals.totalMinor,
+      availablePoints: balance,
+      requestedPoints: balance,
+      program: program,
+    );
+    if (maximum.points <= 0 || maximum.amountMinor <= 0) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('This bill is too small to redeem points.')),
+      );
+      return;
+    }
+
+    final controller = TextEditingController(text: '${maximum.points}');
+    final requested = await showDialog<int>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Use loyalty points'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text('$balance points available'),
+            const SizedBox(height: 8),
+            Text(
+              'Up to ${maximum.points} points can be used on this bill.',
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: controller,
+              autofocus: true,
+              keyboardType: TextInputType.number,
+              decoration: const InputDecoration(
+                labelText: 'Points to use',
+                border: OutlineInputBorder(),
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () {
+              final value = int.tryParse(controller.text.trim());
+              if (value == null || value <= 0) return;
+              Navigator.pop(dialogContext, value);
+            },
+            child: const Text('Use points'),
+          ),
+        ],
+      ),
+    );
+    controller.dispose();
+    if (requested == null || !mounted) return;
+
+    final redemption = maxLoyaltyRedemption(
+      saleMinor: saleTotals.totalMinor,
+      availablePoints: balance,
+      requestedPoints: requested,
+      program: program,
+    );
+    if (redemption.points <= 0 || redemption.amountMinor <= 0) return;
+
+    final grossByProduct = <String, int>{};
+    var totalGross = 0;
+    for (final entry in quantitiesMilli.entries) {
+      final product = cartProducts[entry.key];
+      if (product == null) continue;
+      final gross = (product.unitPriceMinor * entry.value + 500) ~/ 1000;
+      grossByProduct[entry.key] = gross;
+      totalGross += gross;
+    }
+    if (totalGross <= 0) return;
+
+    setState(() {
+      _clearDynamicDiscountsInState();
+      var allocated = 0;
+      final entries = grossByProduct.entries.toList();
+      for (var i = 0; i < entries.length; i++) {
+        final entry = entries[i];
+        final share = i == entries.length - 1
+            ? redemption.amountMinor - allocated
+            : redemption.amountMinor * entry.value ~/ totalGross;
+        if (share <= 0) continue;
+        discountsMinor[entry.key] = share;
+        discountSources[entry.key] = 'loyalty';
+        discountReferences[entry.key] = customer.id;
+        allocated += share;
+      }
+      appliedPromotionName = '${redemption.points} points';
     });
   }
 
@@ -341,7 +482,7 @@ class _SellScreenState extends State<SellScreen> {
       return;
     }
 
-    setState(_clearPromotionDiscountsInState);
+    setState(_clearDynamicDiscountsInState);
     final evaluation = await widget.database.bestPromotionForLines(cartLines);
     if (!mounted) return;
     if (evaluation == null) {
@@ -816,6 +957,16 @@ class _SellScreenState extends State<SellScreen> {
                       : appliedPromotionName!,
                 ),
               ),
+              OutlinedButton.icon(
+                onPressed: totals == null ? null : redeemLoyalty,
+                icon: const Icon(Icons.stars_outlined),
+                label: Text(
+                  selectedCustomer?.loyaltyPoints == null ||
+                          selectedCustomer!.loyaltyPoints == 0
+                      ? 'Use points'
+                      : '${selectedCustomer!.loyaltyPoints} points',
+                ),
+              ),
             ],
           ),
         ),
@@ -917,7 +1068,9 @@ class _SellScreenState extends State<SellScreen> {
                                     Text(
                                       discountSources[product.id] == 'promotion'
                                           ? 'Offer: ${formatInr(discountsMinor[product.id]!)} off'
-                                          : 'Discount ${formatInr(discountsMinor[product.id]!)}',
+                                          : discountSources[product.id] == 'loyalty'
+                                              ? 'Loyalty: ${formatInr(discountsMinor[product.id]!)} off'
+                                              : 'Discount ${formatInr(discountsMinor[product.id]!)}',
                                       style: Theme.of(context)
                                           .textTheme
                                           .labelMedium,
