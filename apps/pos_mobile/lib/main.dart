@@ -1,55 +1,18 @@
 import 'package:flutter/material.dart';
 
+import 'sell/bootstrap_screen.dart';
+import 'sell/local_pos_database.dart';
+import 'sell/sell_screen.dart';
+
 void main() {
-  runApp(const AaraaPosApp());
-}
-
-abstract final class AaraaSpacing {
-  static const double sm = 8;
-  static const double md = 16;
-  static const double lg = 24;
-}
-
-enum SyncState { pending, sending, acknowledged, conflict, rejected }
-
-enum ConflictPolicy {
-  appendOnlyFinancial,
-  inventoryMovement,
-  fieldAwareMasterData,
-  serverAuthoritativeConfiguration,
-}
-
-class SyncEnvelope {
-  const SyncEnvelope({
-    required this.id,
-    required this.organizationId,
-    required this.businessId,
-    required this.storeId,
-    required this.terminalId,
-    required this.idempotencyKey,
-    required this.createdAt,
-    required this.state,
-    required this.conflictPolicy,
-    required this.schemaVersion,
-  });
-
-  final String id;
-  final String organizationId;
-  final String businessId;
-  final String storeId;
-  final String terminalId;
-  final String idempotencyKey;
-  final DateTime createdAt;
-  final SyncState state;
-  final ConflictPolicy conflictPolicy;
-  final int schemaVersion;
-
-  bool get permitsLastWriteWins =>
-      conflictPolicy == ConflictPolicy.fieldAwareMasterData;
+  runApp(AaraaPosApp());
 }
 
 class AaraaPosApp extends StatelessWidget {
-  const AaraaPosApp({super.key});
+  AaraaPosApp({LocalPosDatabase? database, super.key})
+      : database = database ?? LocalPosDatabase();
+
+  final LocalPosDatabase database;
 
   @override
   Widget build(BuildContext context) {
@@ -74,20 +37,103 @@ class AaraaPosApp extends StatelessWidget {
           labelBehavior: NavigationDestinationLabelBehavior.alwaysShow,
         ),
       ),
-      home: const FoundationHome(),
+      home: PosRoot(database: database),
     );
   }
 }
 
-class FoundationHome extends StatefulWidget {
-  const FoundationHome({super.key});
+class PosRoot extends StatefulWidget {
+  const PosRoot({required this.database, super.key});
+
+  final LocalPosDatabase database;
 
   @override
-  State<FoundationHome> createState() => _FoundationHomeState();
+  State<PosRoot> createState() => _PosRootState();
 }
 
-class _FoundationHomeState extends State<FoundationHome> {
-  int index = 0;
+class _PosRootState extends State<PosRoot> {
+  LocalSaleContext? saleContext;
+  Object? loadError;
+  var ready = false;
+
+  @override
+  void initState() {
+    super.initState();
+    initialize();
+  }
+
+  Future<void> initialize() async {
+    try {
+      await widget.database.open();
+      final context = await widget.database.loadContext();
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        saleContext = context;
+        ready = true;
+      });
+    } on Object catch (error) {
+      if (mounted) {
+        setState(() {
+          loadError = error;
+          ready = true;
+        });
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (!ready) {
+      return const Scaffold(
+        body: Center(child: CircularProgressIndicator()),
+      );
+    }
+
+    if (loadError != null) {
+      return Scaffold(
+        body: Center(
+          child: Padding(
+            padding: const EdgeInsets.all(24),
+            child: Text(
+              'AaraaPOS could not open local storage. Restart the app and try again.',
+              textAlign: TextAlign.center,
+              style: Theme.of(context).textTheme.titleMedium,
+            ),
+          ),
+        ),
+      );
+    }
+
+    final contextValue = saleContext;
+    if (contextValue == null) {
+      return BootstrapScreen(
+        database: widget.database,
+        onComplete: (context) => setState(() => saleContext = context),
+      );
+    }
+
+    return MainShell(database: widget.database, saleContext: contextValue);
+  }
+}
+
+class MainShell extends StatefulWidget {
+  const MainShell({
+    required this.database,
+    required this.saleContext,
+    super.key,
+  });
+
+  final LocalPosDatabase database;
+  final LocalSaleContext saleContext;
+
+  @override
+  State<MainShell> createState() => _MainShellState();
+}
+
+class _MainShellState extends State<MainShell> {
+  var index = 0;
 
   static const destinations = <NavigationDestination>[
     NavigationDestination(
@@ -124,44 +170,58 @@ class _FoundationHomeState extends State<FoundationHome> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: Text(titles[index])),
-      body: SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.all(AaraaSpacing.md),
-          child: Center(
-            child: ConstrainedBox(
-              constraints: const BoxConstraints(maxWidth: 520),
-              child: Semantics(
-                container: true,
-                label: '${titles[index]} foundation screen',
-                child: Card(
-                  child: Padding(
-                    padding: const EdgeInsets.all(AaraaSpacing.lg),
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Text(
-                          titles[index],
-                          style: Theme.of(context).textTheme.headlineSmall,
-                        ),
-                        const SizedBox(height: AaraaSpacing.sm),
-                        const Text(
-                          'V0 foundation is ready. Transaction workflows arrive in the next milestone.',
-                          textAlign: TextAlign.center,
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
+      appBar: AppBar(
+        title: Text(titles[index]),
+        actions: [
+          Padding(
+            padding: const EdgeInsets.only(right: 12),
+            child: Center(
+              child: Text(
+                widget.saleContext.storeName,
+                style: Theme.of(context).textTheme.labelLarge,
               ),
             ),
           ),
-        ),
+        ],
       ),
+      body: index == 1
+          ? SellScreen(
+              database: widget.database,
+              saleContext: widget.saleContext,
+            )
+          : _PlaceholderPanel(title: titles[index]),
       bottomNavigationBar: NavigationBar(
         selectedIndex: index,
         destinations: destinations,
         onDestinationSelected: (value) => setState(() => index = value),
+      ),
+    );
+  }
+}
+
+class _PlaceholderPanel extends StatelessWidget {
+  const _PlaceholderPanel({required this.title});
+
+  final String title;
+
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 520),
+        child: Semantics(
+          container: true,
+          label: '$title screen',
+          child: Card(
+            child: Padding(
+              padding: const EdgeInsets.all(24),
+              child: Text(
+                '$title is planned for its roadmap milestone.',
+                textAlign: TextAlign.center,
+              ),
+            ),
+          ),
+        ),
       ),
     );
   }
