@@ -6,6 +6,7 @@ import 'package:uuid/uuid.dart';
 
 import '../customers/customer_domain.dart';
 import '../inventory/inventory_domain.dart';
+import '../purchases/purchase_domain.dart';
 import 'sale_domain.dart';
 
 class LocalSaleContext {
@@ -801,6 +802,222 @@ class LocalPosDatabase {
       [customerId],
     );
     return (rows.single['count'] as int?) ?? 0;
+  }
+
+  Future<LocalSupplier> addSupplier({
+    required String name,
+    String? mobile,
+    String? gstin,
+  }) async {
+    final trimmedName = name.trim();
+    if (trimmedName.isEmpty) {
+      throw ArgumentError('Supplier name is required');
+    }
+    final now = DateTime.now().toUtc();
+    final supplier = LocalSupplier(
+      id: _uuid.v4(),
+      name: trimmedName,
+      mobile: mobile?.trim().isEmpty ?? true ? null : mobile!.trim(),
+      gstin: gstin?.trim().isEmpty ?? true ? null : gstin!.trim(),
+      balanceMinor: 0,
+    );
+    await _database.insert('supplier', {
+      'id': supplier.id,
+      'name': supplier.name,
+      'mobile_e164': supplier.mobile,
+      'gstin': supplier.gstin,
+      'created_at': now.toIso8601String(),
+      'updated_at': now.toIso8601String(),
+    });
+    return supplier;
+  }
+
+  Future<int> _supplierBalanceMinor(
+    DatabaseExecutor executor,
+    String supplierId,
+  ) async {
+    final rows = await executor.rawQuery(
+      '''
+      SELECT COALESCE(
+        SUM(
+          CASE
+            WHEN entry_type IN ('purchase_charge', 'correction_increase')
+              THEN amount_minor
+            ELSE -amount_minor
+          END
+        ),
+        0
+      ) AS balance_minor
+      FROM supplier_ledger_entry
+      WHERE supplier_id = ?
+      ''',
+      [supplierId],
+    );
+    return rows.single['balance_minor']! as int;
+  }
+
+  Future<List<LocalSupplier>> listSuppliers() async {
+    final rows = await _database.query(
+      'supplier',
+      orderBy: 'name COLLATE NOCASE',
+    );
+    final result = <LocalSupplier>[];
+    for (final row in rows) {
+      final id = row['id']! as String;
+      result.add(
+        LocalSupplier(
+          id: id,
+          name: row['name']! as String,
+          mobile: row['mobile_e164'] as String?,
+          gstin: row['gstin'] as String?,
+          balanceMinor: await _supplierBalanceMinor(_database, id),
+        ),
+      );
+    }
+    return result;
+  }
+
+  Future<String> createPurchaseOrder({
+    required LocalSaleContext context,
+    required String supplierId,
+    required String productId,
+    required int quantityMilli,
+    required int unitCostMinor,
+    int taxMinor = 0,
+    String? note,
+  }) async {
+    final totalMinor = purchaseLineTotalMinor(
+      quantityMilli: quantityMilli,
+      unitCostMinor: unitCostMinor,
+      taxMinor: taxMinor,
+    );
+    final orderId = _uuid.v4();
+    final lineId = _uuid.v4();
+    final idempotencyKey = _uuid.v4();
+    final now = DateTime.now().toUtc();
+    final orderNumber = 'PO-${now.microsecondsSinceEpoch}';
+
+    await _database.transaction((txn) async {
+      final supplierRows = await txn.query(
+        'supplier',
+        columns: ['id'],
+        where: 'id = ?',
+        whereArgs: [supplierId],
+        limit: 1,
+      );
+      final productRows = await txn.query(
+        'product',
+        columns: ['id'],
+        where: 'id = ?',
+        whereArgs: [productId],
+        limit: 1,
+      );
+      if (supplierRows.isEmpty || productRows.isEmpty) {
+        throw StateError('Supplier or product not found');
+      }
+
+      await txn.insert('purchase_order', {
+        'id': orderId,
+        'supplier_id': supplierId,
+        'order_number': orderNumber,
+        'status': 'ordered',
+        'ordered_at': now.toIso8601String(),
+        'note': note?.trim(),
+      });
+      await txn.insert('purchase_order_line', {
+        'id': lineId,
+        'purchase_order_id': orderId,
+        'product_id': productId,
+        'quantity_ordered_milli': quantityMilli,
+        'quantity_received_milli': 0,
+        'unit_cost_minor': unitCostMinor,
+        'tax_minor': taxMinor,
+      });
+      await txn.insert('sync_outbox', {
+        'id': _uuid.v4(),
+        'entity_type': 'purchase_order',
+        'entity_id': orderId,
+        'organization_id': context.organizationId,
+        'business_id': context.businessId,
+        'store_id': context.storeId,
+        'terminal_id': context.terminalId,
+        'idempotency_key': idempotencyKey,
+        'payload_json': jsonEncode({
+          'purchaseOrderId': orderId,
+          'supplierId': supplierId,
+          'orderNumber': orderNumber,
+          'orderedAt': now.toIso8601String(),
+          'note': note?.trim(),
+          'totalMinor': totalMinor,
+          'lines': [
+            {
+              'lineId': lineId,
+              'productId': productId,
+              'quantityOrderedMilli': quantityMilli,
+              'unitCostMinor': unitCostMinor,
+              'taxMinor': taxMinor,
+            }
+          ],
+        }),
+        'state': 'pending',
+        'created_at': now.toIso8601String(),
+      });
+    });
+    return orderId;
+  }
+
+  Future<List<LocalPurchaseOrder>> listPurchaseOrders() async {
+    final rows = await _database.rawQuery(
+      '''
+      SELECT po.*, s.name AS supplier_name
+      FROM purchase_order po
+      INNER JOIN supplier s ON s.id = po.supplier_id
+      ORDER BY po.ordered_at DESC
+      ''',
+    );
+    final result = <LocalPurchaseOrder>[];
+    for (final row in rows) {
+      final orderId = row['id']! as String;
+      final lineRows = await _database.rawQuery(
+        '''
+        SELECT pol.*, p.name AS product_name
+        FROM purchase_order_line pol
+        INNER JOIN product p ON p.id = pol.product_id
+        WHERE pol.purchase_order_id = ?
+        ORDER BY pol.id
+        ''',
+        [orderId],
+      );
+      final lines = lineRows
+          .map(
+            (line) => LocalPurchaseOrderLine(
+              id: line['id']! as String,
+              productId: line['product_id']! as String,
+              productName: line['product_name']! as String,
+              quantityOrderedMilli:
+                  line['quantity_ordered_milli']! as int,
+              quantityReceivedMilli:
+                  line['quantity_received_milli']! as int,
+              unitCostMinor: line['unit_cost_minor']! as int,
+              taxMinor: line['tax_minor']! as int,
+            ),
+          )
+          .toList();
+      result.add(
+        LocalPurchaseOrder(
+          id: orderId,
+          supplierId: row['supplier_id']! as String,
+          supplierName: row['supplier_name']! as String,
+          orderNumber: row['order_number']! as String,
+          status: row['status']! as String,
+          orderedAt: DateTime.parse(row['ordered_at']! as String),
+          totalMinor:
+              lines.fold(0, (sum, line) => sum + line.lineTotalMinor),
+          lines: lines,
+        ),
+      );
+    }
+    return result;
   }
 
   Future<int> pendingOutboxCount() async {
