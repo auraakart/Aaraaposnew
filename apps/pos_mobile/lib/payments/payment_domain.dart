@@ -1,4 +1,4 @@
-enum PaymentMethod { cash, upi, card }
+enum PaymentMethod { cash, upi, card, customerCredit }
 
 enum PaymentStatus { pending, authorized, captured, failed, cancelled }
 
@@ -100,6 +100,7 @@ void validatePaymentAllocations(
       throw ArgumentError('Payment amount must be positive');
     }
     if (allocation.method != PaymentMethod.cash &&
+        allocation.method != PaymentMethod.customerCredit &&
         allocation.status == PaymentStatus.captured &&
         (allocation.provider == null || allocation.providerReference == null)) {
       throw ArgumentError('Captured external payment requires provider evidence');
@@ -149,6 +150,7 @@ String paymentMethodLabel(PaymentMethod method) {
     PaymentMethod.cash => 'Cash',
     PaymentMethod.upi => 'UPI',
     PaymentMethod.card => 'Card',
+    PaymentMethod.customerCredit => 'Customer Credit',
   };
 }
 
@@ -175,7 +177,7 @@ class PaymentCoordinator {
     required PaymentMethod method,
     required PaymentProviderRequest request,
   }) async {
-    if (method == PaymentMethod.cash) {
+    if (method == PaymentMethod.cash || method == PaymentMethod.customerCredit) {
       throw ArgumentError('Cash does not use an external provider adapter');
     }
 

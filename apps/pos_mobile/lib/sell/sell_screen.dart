@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../customers/customer_domain.dart';
 import '../payments/payment_domain.dart';
 import '../payments/payment_method_sheet.dart';
 import 'local_pos_database.dart';
@@ -26,6 +27,7 @@ class _SellScreenState extends State<SellScreen> {
   List<Product> products = const [];
   bool loading = true;
   int pendingSync = 0;
+  LocalCustomer? selectedCustomer;
 
   @override
   void initState() {
@@ -198,28 +200,154 @@ class _SellScreenState extends State<SellScreen> {
     }
   }
 
+  Future<void> chooseCustomer() async {
+    final customers = await widget.database.listCustomers();
+    if (!mounted) return;
+
+    final selected = await showDialog<LocalCustomer?>(
+      context: context,
+      builder: (dialogContext) => SimpleDialog(
+        title: const Text('Choose customer'),
+        children: [
+          SimpleDialogOption(
+            onPressed: () => Navigator.pop(dialogContext),
+            child: const ListTile(
+              leading: Icon(Icons.person_outline),
+              title: Text('Guest checkout'),
+              contentPadding: EdgeInsets.zero,
+            ),
+          ),
+          for (final customer in customers)
+            SimpleDialogOption(
+              onPressed: () => Navigator.pop(dialogContext, customer),
+              child: ListTile(
+                leading: const Icon(Icons.person),
+                title: Text(customer.name),
+                subtitle: customer.creditBalanceMinor > 0
+                    ? Text('${formatInr(customer.creditBalanceMinor)} due')
+                    : null,
+                contentPadding: EdgeInsets.zero,
+              ),
+            ),
+          if (customers.isEmpty)
+            const Padding(
+              padding: EdgeInsets.all(16),
+              child: Text('Add customers from the Customers tab first.'),
+            ),
+        ],
+      ),
+    );
+
+    if (!mounted) return;
+    setState(() => selectedCustomer = selected);
+  }
+
+  Future<int?> chooseCreditDays() {
+    return showDialog<int>(
+      context: context,
+      builder: (dialogContext) => SimpleDialog(
+        title: const Text('When should payment be due?'),
+        children: [
+          SimpleDialogOption(
+            onPressed: () => Navigator.pop(dialogContext, 7),
+            child: const Text('7 days'),
+          ),
+          SimpleDialogOption(
+            onPressed: () => Navigator.pop(dialogContext, 14),
+            child: const Text('14 days'),
+          ),
+          SimpleDialogOption(
+            onPressed: () => Navigator.pop(dialogContext, 30),
+            child: const Text('30 days'),
+          ),
+          SimpleDialogOption(
+            onPressed: () => Navigator.pop(dialogContext, 0),
+            child: const Text('No due date'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> completeSale(
+    OfflineSaleResult result, {
+    required String title,
+  }) async {
+    if (!mounted) return;
+    setState(() {
+      quantitiesMilli.clear();
+      cartProducts.clear();
+      selectedCustomer = null;
+    });
+    await refreshProducts(searchController.text);
+    if (!mounted) return;
+
+    await showDialog<void>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: Text(title),
+        content: SelectableText(result.receiptText),
+        actions: [
+          FilledButton(
+            onPressed: () => Navigator.pop(dialogContext),
+            child: const Text('New sale'),
+          ),
+        ],
+      ),
+    );
+  }
+
   Future<void> checkout() async {
     final saleTotals = totals;
-    if (saleTotals == null) {
-      return;
+    if (saleTotals == null) return;
+
+    final methods = <PaymentMethod>{PaymentMethod.cash};
+    if (selectedCustomer != null) {
+      methods.add(PaymentMethod.customerCredit);
     }
 
     final paymentChoice = await showPaymentMethodSheet(
       context,
-      availableMethods: const {PaymentMethod.cash},
+      availableMethods: methods,
       splitEnabled: false,
     );
-    if (!mounted || paymentChoice == null) {
+    if (!mounted || paymentChoice == null) return;
+
+    if (paymentChoice == PaymentChoice.customerCredit) {
+      final customer = selectedCustomer;
+      if (customer == null) return;
+      final days = await chooseCreditDays();
+      if (!mounted || days == null) return;
+      final dueDate = days == 0
+          ? null
+          : DateTime.now().toUtc().add(Duration(days: days));
+      try {
+        final result = await widget.database.finalizeCustomerCreditSale(
+          context: widget.saleContext,
+          lines: cartLines,
+          customerId: customer.id,
+          dueDate: dueDate,
+        );
+        await completeSale(
+          result,
+          title: '${customer.name}: ${formatInr(result.totalMinor)} due',
+        );
+      } on Object {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Credit sale was not saved. Try again.')),
+          );
+        }
+      }
       return;
     }
+
     if (paymentChoice != PaymentChoice.cash) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('This payment method needs a configured provider.'),
-          ),
-        );
-      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('This payment method needs a configured provider.'),
+        ),
+      );
       return;
     }
 
@@ -231,108 +359,85 @@ class _SellScreenState extends State<SellScreen> {
     final tendered = await showModalBottomSheet<int>(
       context: context,
       isScrollControlled: true,
-      builder: (sheetContext) {
-        return SafeArea(
-          child: Padding(
-            padding: EdgeInsets.fromLTRB(
-              24,
-              24,
-              24,
-              24 + MediaQuery.viewInsetsOf(sheetContext).bottom,
-            ),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                Text(
-                  'Bill ${formatInr(exact)}',
-                  style: Theme.of(sheetContext).textTheme.headlineMedium,
-                ),
-                const SizedBox(height: 8),
-                const Text('Cash received'),
-                const SizedBox(height: 16),
-                Wrap(
-                  spacing: 8,
-                  runSpacing: 8,
-                  children: [
-                    FilledButton(
-                      onPressed: () => Navigator.pop(sheetContext, exact),
-                      child: Text('Exact ${formatInr(exact)}'),
-                    ),
-                    if (quick500 != null)
-                      FilledButton.tonal(
-                        onPressed: () => Navigator.pop(sheetContext, quick500),
-                        child: const Text('₹500'),
-                      ),
-                    if (quick1000 != null)
-                      FilledButton.tonal(
-                        onPressed: () => Navigator.pop(sheetContext, quick1000),
-                        child: const Text('₹1000'),
-                      ),
-                  ],
-                ),
-                const SizedBox(height: 16),
-                TextField(
-                  controller: other,
-                  keyboardType: const TextInputType.numberWithOptions(
-                    decimal: true,
-                  ),
-                  decoration: const InputDecoration(
-                    labelText: 'Other amount ₹',
-                    border: OutlineInputBorder(),
-                  ),
-                ),
-                const SizedBox(height: 12),
-                FilledButton(
-                  onPressed: () {
-                    final value = parseRupeesToMinor(other.text);
-                    if (value != null && value >= exact) {
-                      Navigator.pop(sheetContext, value);
-                    }
-                  },
-                  child: const Text('Take cash'),
-                ),
-              ],
-            ),
+      builder: (sheetContext) => SafeArea(
+        child: Padding(
+          padding: EdgeInsets.fromLTRB(
+            24,
+            24,
+            24,
+            24 + MediaQuery.viewInsetsOf(sheetContext).bottom,
           ),
-        );
-      },
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Text(
+                'Bill ${formatInr(exact)}',
+                style: Theme.of(sheetContext).textTheme.headlineMedium,
+              ),
+              const SizedBox(height: 8),
+              const Text('Cash received'),
+              const SizedBox(height: 16),
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: [
+                  FilledButton(
+                    onPressed: () => Navigator.pop(sheetContext, exact),
+                    child: Text('Exact ${formatInr(exact)}'),
+                  ),
+                  if (quick500 != null)
+                    FilledButton.tonal(
+                      onPressed: () => Navigator.pop(sheetContext, quick500),
+                      child: const Text('₹500'),
+                    ),
+                  if (quick1000 != null)
+                    FilledButton.tonal(
+                      onPressed: () => Navigator.pop(sheetContext, quick1000),
+                      child: const Text('₹1000'),
+                    ),
+                ],
+              ),
+              const SizedBox(height: 16),
+              TextField(
+                controller: other,
+                keyboardType: const TextInputType.numberWithOptions(
+                  decimal: true,
+                ),
+                decoration: const InputDecoration(
+                  labelText: 'Other amount ₹',
+                  border: OutlineInputBorder(),
+                ),
+              ),
+              const SizedBox(height: 12),
+              FilledButton(
+                onPressed: () {
+                  final value = parseRupeesToMinor(other.text);
+                  if (value != null && value >= exact) {
+                    Navigator.pop(sheetContext, value);
+                  }
+                },
+                child: const Text('Take cash'),
+              ),
+            ],
+          ),
+        ),
+      ),
     );
     other.dispose();
 
-    if (tendered == null) {
-      return;
-    }
+    if (tendered == null) return;
 
     try {
       final result = await widget.database.finalizeCashSale(
         context: widget.saleContext,
         lines: cartLines,
         tenderedMinor: tendered,
+        customerId: selectedCustomer?.id,
       );
-      if (!mounted) {
-        return;
-      }
-      setState(() {
-        quantitiesMilli.clear();
-        cartProducts.clear();
-      });
-      await refreshProducts(searchController.text);
-      if (!mounted) {
-        return;
-      }
-      await showDialog<void>(
-        context: context,
-        builder: (dialogContext) => AlertDialog(
-          title: Text('Return ${formatInr(result.changeMinor)}'),
-          content: SelectableText(result.receiptText),
-          actions: [
-            FilledButton(
-              onPressed: () => Navigator.pop(dialogContext),
-              child: const Text('New sale'),
-            ),
-          ],
-        ),
+      await completeSale(
+        result,
+        title: 'Return ${formatInr(result.changeMinor)}',
       );
     } on Object {
       if (mounted) {
@@ -373,6 +478,21 @@ class _SellScreenState extends State<SellScreen> {
                 icon: const Icon(Icons.add),
               ),
             ],
+          ),
+        ),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+          child: Align(
+            alignment: Alignment.centerLeft,
+            child: OutlinedButton.icon(
+              onPressed: chooseCustomer,
+              icon: const Icon(Icons.person_outline),
+              label: Text(
+                selectedCustomer == null
+                    ? 'Guest customer'
+                    : selectedCustomer!.name,
+              ),
+            ),
           ),
         ),
         if (pendingSync > 0)

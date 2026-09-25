@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 
 import 'payment_domain.dart';
 
-enum PaymentChoice { cash, upi, card, split }
+enum PaymentChoice { cash, upi, card, customerCredit, split }
 
 Future<PaymentChoice?> showPaymentMethodSheet(
   BuildContext context, {
@@ -42,6 +42,14 @@ Future<PaymentChoice?> showPaymentMethodSheet(
               enabled: availableMethods.contains(PaymentMethod.card),
               disabledReason: 'Connect a payment provider to enable cards.',
               onTap: () => Navigator.pop(sheetContext, PaymentChoice.card),
+            ),
+            _PaymentTile(
+              icon: Icons.schedule_send_outlined,
+              title: 'Customer Credit / Pay Later',
+              enabled: availableMethods.contains(PaymentMethod.customerCredit),
+              disabledReason: 'Select a customer before using Pay Later.',
+              onTap: () =>
+                  Navigator.pop(sheetContext, PaymentChoice.customerCredit),
             ),
             _PaymentTile(
               icon: Icons.call_split,

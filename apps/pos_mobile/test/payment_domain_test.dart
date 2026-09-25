@@ -42,6 +42,23 @@ void main() {
     );
   });
 
+  test('customer credit finalizes without external provider evidence', () {
+    expect(
+      canFinalizeSale(
+        85000,
+        const [
+          PaymentAllocation(
+            id: 'credit-1',
+            method: PaymentMethod.customerCredit,
+            amountMinor: 85000,
+            status: PaymentStatus.captured,
+          ),
+        ],
+      ),
+      isTrue,
+    );
+  });
+
   test('pending external payment prevents sale finalization', () {
     expect(
       canFinalizeSale(
