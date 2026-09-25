@@ -480,6 +480,21 @@ class _SellScreenState extends State<SellScreen> {
             ],
           ),
         ),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+          child: Align(
+            alignment: Alignment.centerLeft,
+            child: OutlinedButton.icon(
+              onPressed: chooseCustomer,
+              icon: const Icon(Icons.person_outline),
+              label: Text(
+                selectedCustomer == null
+                    ? 'Guest customer'
+                    : selectedCustomer!.name,
+              ),
+            ),
+          ),
+        ),
         if (pendingSync > 0)
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 16),
