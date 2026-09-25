@@ -1,6 +1,7 @@
 import 'package:aaraapos_pos/sell/local_pos_database.dart';
 import 'package:aaraapos_pos/sell/sale_domain.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:sqflite/sqflite.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
 void main() {
@@ -44,6 +45,34 @@ void main() {
     customers = await database.listCustomers();
     expect(customers.single.creditBalanceMinor, 55000);
     expect(await database.customerCreditEntryCount(customer.id), 2);
+  });
+
+  test('cash sale cannot attach an unknown customer id', () async {
+    final database = LocalPosDatabase(
+      factory: databaseFactoryFfi,
+      databasePath: inMemoryDatabasePath,
+    );
+    addTearDown(database.close);
+
+    await database.open();
+    final context = await database.bootstrapOwner(
+      businessName: 'Aaraa Demo Shop',
+      storeName: 'Main Store',
+    );
+    final product = await database.addProduct(
+      name: 'Milk',
+      unitPriceMinor: 10000,
+    );
+
+    await expectLater(
+      database.finalizeCashSale(
+        context: context,
+        lines: [SaleLineInput(product: product, quantityMilli: 1000)],
+        tenderedMinor: 10000,
+        customerId: 'missing-customer',
+      ),
+      throwsA(isA<DatabaseException>()),
+    );
   });
 
   test('collection cannot exceed outstanding customer credit', () async {
