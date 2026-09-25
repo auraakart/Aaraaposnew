@@ -59,16 +59,18 @@ class _ReturnsScreenState extends State<ReturnsScreen> {
               mainAxisSize: MainAxisSize.min,
               children: [
                 for (final line in sale.lines)
-                  RadioListTile<ReturnableSaleLine>(
-                    value: line,
-                    groupValue: selectedLine,
-                    onChanged: (value) {
+                  ListTile(
+                    selected: selectedLine?.saleLineId == line.saleLineId,
+                    leading: Icon(
+                      selectedLine?.saleLineId == line.saleLineId
+                          ? Icons.radio_button_checked
+                          : Icons.radio_button_unchecked,
+                    ),
+                    onTap: () {
                       setDialogState(() {
-                        selectedLine = value;
-                        if (value != null) {
-                          quantity.text =
-                              _formatQuantity(value.remainingQuantityMilli);
-                        }
+                        selectedLine = line;
+                        quantity.text =
+                            _formatQuantity(line.remainingQuantityMilli);
                       });
                     },
                     title: Text(line.productName),
