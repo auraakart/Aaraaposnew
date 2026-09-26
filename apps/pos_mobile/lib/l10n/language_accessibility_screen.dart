@@ -121,13 +121,14 @@ class _LanguageTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return RadioListTile<String>(
-      value: value,
-      groupValue: selected,
+    final active = value == selected;
+    return ListTile(
+      selected: active,
+      leading: Icon(
+        active ? Icons.radio_button_checked : Icons.radio_button_off,
+      ),
       title: Text(title),
-      onChanged: (next) {
-        if (next != null) onChanged(next);
-      },
+      onTap: () => onChanged(value),
     );
   }
 }
