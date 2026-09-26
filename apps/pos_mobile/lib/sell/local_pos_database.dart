@@ -97,7 +97,7 @@ class LocalPosDatabase {
     _db = await _factory.openDatabase(
       path,
       options: OpenDatabaseOptions(
-        version: 13,
+        version: 14,
         onConfigure: (db) async {
           await db.execute('PRAGMA foreign_keys = ON');
         },
@@ -377,7 +377,21 @@ class LocalPosDatabase {
               status TEXT NOT NULL,
               resolved_by_employee_id TEXT REFERENCES employee(id),
               resolved_at TEXT,
-              reason TEXT
+              reason TEXT,
+              action_fingerprint TEXT,
+              requested_amount_minor INTEGER,
+              expires_at TEXT
+            )
+          ''');
+          await db.execute('''
+            CREATE TABLE approval_consumption (
+              id TEXT PRIMARY KEY,
+              approval_request_id TEXT NOT NULL UNIQUE
+                REFERENCES approval_request(id),
+              consumed_by_employee_id TEXT NOT NULL REFERENCES employee(id),
+              action_fingerprint TEXT NOT NULL,
+              consumed_at TEXT NOT NULL,
+              request_id TEXT NOT NULL
             )
           ''');
           await db.execute('''
@@ -1073,6 +1087,32 @@ class LocalPosDatabase {
             await db.execute(
               'ALTER TABLE held_sale_line ADD COLUMN tax_rule_version_id TEXT',
             );
+          }
+          if (oldVersion < 14) {
+            await db.execute(
+              'ALTER TABLE approval_request ADD COLUMN action_fingerprint TEXT',
+            );
+            await db.execute(
+              'ALTER TABLE approval_request ADD COLUMN requested_amount_minor INTEGER',
+            );
+            await db.execute(
+              'ALTER TABLE approval_request ADD COLUMN expires_at TEXT',
+            );
+            await db.execute('''
+              CREATE TABLE approval_consumption (
+                id TEXT PRIMARY KEY,
+                approval_request_id TEXT NOT NULL UNIQUE
+                  REFERENCES approval_request(id),
+                consumed_by_employee_id TEXT NOT NULL REFERENCES employee(id),
+                action_fingerprint TEXT NOT NULL,
+                consumed_at TEXT NOT NULL,
+                request_id TEXT NOT NULL
+              )
+            ''');
+            await db.execute('''
+              CREATE INDEX approval_request_status_time_idx
+              ON approval_request (status, requested_at DESC)
+            ''');
           }
         },
       ),
@@ -3175,6 +3215,398 @@ class LocalPosDatabase {
     return closed;
   }
 
+  Future<bool> canResolveApprovals(LocalSaleContext context) async {
+    final rows = await _database.query(
+      'employee',
+      columns: ['role'],
+      where: 'id = ? AND active = 1',
+      whereArgs: [context.userId],
+      limit: 1,
+    );
+    if (rows.isEmpty) return false;
+    final role = rows.single['role']! as String;
+    return role == 'owner' || role == 'manager';
+  }
+
+  Future<String> requestApproval({
+    required LocalSaleContext context,
+    required String actionType,
+    required String entityType,
+    required String entityId,
+    required String reason,
+    String? actionFingerprint,
+    int? requestedAmountMinor,
+    Duration validFor = const Duration(hours: 2),
+  }) async {
+    final normalizedAction = actionType.trim();
+    final normalizedEntityType = entityType.trim();
+    final normalizedEntityId = entityId.trim();
+    final normalizedReason = reason.trim();
+    final normalizedFingerprint = actionFingerprint?.trim();
+
+    if (normalizedAction.isEmpty ||
+        normalizedEntityType.isEmpty ||
+        normalizedEntityId.isEmpty ||
+        normalizedReason.isEmpty ||
+        (normalizedFingerprint != null && normalizedFingerprint.isEmpty) ||
+        (requestedAmountMinor != null && requestedAmountMinor < 0) ||
+        validFor <= Duration.zero ||
+        validFor > const Duration(hours: 24)) {
+      throw ArgumentError('Invalid approval request');
+    }
+
+    final now = DateTime.now().toUtc();
+    final expiresAt = now.add(validFor);
+
+    return _database.transaction((txn) async {
+      final requester = await txn.query(
+        'employee',
+        columns: ['id'],
+        where: 'id = ? AND active = 1',
+        whereArgs: [context.userId],
+        limit: 1,
+      );
+      if (requester.isEmpty) {
+        throw StateError('Active requester identity not found');
+      }
+
+      if (normalizedFingerprint != null) {
+        final existing = await txn.query(
+          'approval_request',
+          columns: ['id'],
+          where:
+              'status = ? AND action_type = ? AND entity_type = ? '
+              'AND entity_id = ? AND requested_by_employee_id = ? '
+              'AND action_fingerprint = ?',
+          whereArgs: [
+            'pending',
+            normalizedAction,
+            normalizedEntityType,
+            normalizedEntityId,
+            context.userId,
+            normalizedFingerprint,
+          ],
+          orderBy: 'requested_at DESC',
+          limit: 1,
+        );
+        if (existing.isNotEmpty) {
+          return existing.single['id']! as String;
+        }
+      }
+
+      final approvalId = _uuid.v4();
+      await txn.insert('approval_request', {
+        'id': approvalId,
+        'action_type': normalizedAction,
+        'entity_type': normalizedEntityType,
+        'entity_id': normalizedEntityId,
+        'requested_by_employee_id': context.userId,
+        'requested_at': now.toIso8601String(),
+        'status': 'pending',
+        'reason': normalizedReason,
+        'action_fingerprint': normalizedFingerprint,
+        'requested_amount_minor': requestedAmountMinor,
+        'expires_at': expiresAt.toIso8601String(),
+      });
+
+      await txn.insert('sync_outbox', {
+        'id': _uuid.v4(),
+        'entity_type': 'approval_request',
+        'entity_id': approvalId,
+        'organization_id': context.organizationId,
+        'business_id': context.businessId,
+        'store_id': context.storeId,
+        'terminal_id': context.terminalId,
+        'idempotency_key': 'approval-request:$approvalId',
+        'payload_json': jsonEncode({
+          'approvalRequestId': approvalId,
+          'actionType': normalizedAction,
+          'entityType': normalizedEntityType,
+          'entityId': normalizedEntityId,
+          'requestedByUserId': context.userId,
+          'requestedAt': now.toIso8601String(),
+          'status': 'pending',
+          'actionFingerprint': normalizedFingerprint,
+          'requestedAmountMinor': requestedAmountMinor,
+          'expiresAt': expiresAt.toIso8601String(),
+          'reason': normalizedReason,
+        }),
+        'state': 'pending',
+        'created_at': now.toIso8601String(),
+      });
+
+      await _appendAuditEvent(
+        txn,
+        context: context,
+        action: 'approval.requested',
+        entityType: 'approval_request',
+        entityId: approvalId,
+        occurredAt: now,
+        metadata: {
+          'actionType': normalizedAction,
+          'targetEntityType': normalizedEntityType,
+          'targetEntityId': normalizedEntityId,
+          'requestedAmountMinor': requestedAmountMinor,
+        },
+      );
+      return approvalId;
+    });
+  }
+
+  Future<List<LocalApprovalRequest>> listApprovalRequests({
+    required LocalSaleContext context,
+    LocalApprovalStatus? status,
+    int limit = 100,
+  }) async {
+    if (limit <= 0 || limit > 500) {
+      throw ArgumentError('Approval limit must be between 1 and 500');
+    }
+    if (!await canResolveApprovals(context)) {
+      throw StateError('This role cannot review approvals');
+    }
+
+    final statusWhere = status == null ? '' : 'WHERE ar.status = ?';
+    final args = status == null
+        ? <Object?>[]
+        : <Object?>[localApprovalStatusValue(status)];
+
+    final rows = await _database.rawQuery(
+      '''
+      SELECT
+        ar.*,
+        requester.name AS requested_by_name,
+        resolver.name AS resolved_by_name,
+        ac.consumed_at
+      FROM approval_request ar
+      INNER JOIN employee requester
+        ON requester.id = ar.requested_by_employee_id
+      LEFT JOIN employee resolver
+        ON resolver.id = ar.resolved_by_employee_id
+      LEFT JOIN approval_consumption ac
+        ON ac.approval_request_id = ar.id
+      $statusWhere
+      ORDER BY ar.requested_at DESC, ar.id DESC
+      LIMIT ?
+      ''',
+      [...args, limit],
+    );
+
+    return rows
+        .map(
+          (row) => LocalApprovalRequest(
+            id: row['id']! as String,
+            actionType: row['action_type']! as String,
+            entityType: row['entity_type']! as String,
+            entityId: row['entity_id']! as String,
+            requestedByEmployeeId:
+                row['requested_by_employee_id']! as String,
+            requestedByName: row['requested_by_name']! as String,
+            requestedAt: DateTime.parse(row['requested_at']! as String),
+            status:
+                localApprovalStatusFromValue(row['status']! as String),
+            actionFingerprint: row['action_fingerprint'] as String?,
+            requestedAmountMinor: row['requested_amount_minor'] as int?,
+            expiresAt: row['expires_at'] == null
+                ? null
+                : DateTime.parse(row['expires_at']! as String),
+            resolvedByEmployeeId:
+                row['resolved_by_employee_id'] as String?,
+            resolvedByName: row['resolved_by_name'] as String?,
+            resolvedAt: row['resolved_at'] == null
+                ? null
+                : DateTime.parse(row['resolved_at']! as String),
+            reason: row['reason'] as String?,
+            consumed: row['consumed_at'] != null,
+            consumedAt: row['consumed_at'] == null
+                ? null
+                : DateTime.parse(row['consumed_at']! as String),
+          ),
+        )
+        .toList();
+  }
+
+  Future<void> resolveApprovalRequest({
+    required LocalSaleContext context,
+    required String approvalRequestId,
+    required bool approve,
+    String? reason,
+  }) async {
+    final normalizedId = approvalRequestId.trim();
+    if (normalizedId.isEmpty) {
+      throw ArgumentError('approvalRequestId is required');
+    }
+    final now = DateTime.now().toUtc();
+
+    await _database.transaction((txn) async {
+      final resolvers = await txn.query(
+        'employee',
+        columns: ['role'],
+        where: 'id = ? AND active = 1',
+        whereArgs: [context.userId],
+        limit: 1,
+      );
+      if (resolvers.isEmpty) {
+        throw StateError('Active resolver identity not found');
+      }
+      final role = resolvers.single['role']! as String;
+      if (role != 'owner' && role != 'manager') {
+        throw StateError('This role cannot resolve approvals');
+      }
+
+      final approvals = await txn.query(
+        'approval_request',
+        where: 'id = ?',
+        whereArgs: [normalizedId],
+        limit: 1,
+      );
+      if (approvals.isEmpty) {
+        throw StateError('Approval request not found');
+      }
+      final approval = approvals.single;
+      if (approval['status'] != 'pending') {
+        throw StateError('Approval request is already resolved');
+      }
+      if (approval['requested_by_employee_id'] == context.userId) {
+        throw StateError('You cannot resolve your own approval request');
+      }
+
+      final status = approve ? 'approved' : 'rejected';
+      await txn.update(
+        'approval_request',
+        {
+          'status': status,
+          'resolved_by_employee_id': context.userId,
+          'resolved_at': now.toIso8601String(),
+          if (reason?.trim().isNotEmpty ?? false) 'reason': reason!.trim(),
+        },
+        where: 'id = ? AND status = ?',
+        whereArgs: [normalizedId, 'pending'],
+      );
+
+      await txn.insert('sync_outbox', {
+        'id': _uuid.v4(),
+        'entity_type': 'approval_request',
+        'entity_id': normalizedId,
+        'organization_id': context.organizationId,
+        'business_id': context.businessId,
+        'store_id': context.storeId,
+        'terminal_id': context.terminalId,
+        'idempotency_key': 'approval-resolution:$normalizedId:$status',
+        'payload_json': jsonEncode({
+          'approvalRequestId': normalizedId,
+          'status': status,
+          'resolvedByUserId': context.userId,
+          'resolvedAt': now.toIso8601String(),
+          'reason': reason?.trim(),
+        }),
+        'state': 'pending',
+        'created_at': now.toIso8601String(),
+      });
+
+      await _appendAuditEvent(
+        txn,
+        context: context,
+        action: approve ? 'approval.approved' : 'approval.rejected',
+        entityType: 'approval_request',
+        entityId: normalizedId,
+        occurredAt: now,
+        metadata: {
+          'actionType': approval['action_type'],
+          'targetEntityType': approval['entity_type'],
+          'targetEntityId': approval['entity_id'],
+        },
+      );
+    });
+  }
+
+  Future<String> _consumeApproval(
+    DatabaseExecutor executor, {
+    required LocalSaleContext context,
+    required String actionType,
+    required String entityType,
+    required String entityId,
+    required String actionFingerprint,
+    required DateTime now,
+  }) async {
+    final rows = await executor.rawQuery(
+      '''
+      SELECT ar.id
+      FROM approval_request ar
+      LEFT JOIN approval_consumption ac
+        ON ac.approval_request_id = ar.id
+      WHERE ar.status = 'approved'
+        AND ar.action_type = ?
+        AND ar.entity_type = ?
+        AND ar.entity_id = ?
+        AND ar.requested_by_employee_id = ?
+        AND ar.action_fingerprint = ?
+        AND (ar.expires_at IS NULL OR ar.expires_at > ?)
+        AND ac.id IS NULL
+      ORDER BY ar.resolved_at DESC, ar.id DESC
+      LIMIT 1
+      ''',
+      [
+        actionType,
+        entityType,
+        entityId,
+        context.userId,
+        actionFingerprint,
+        now.toIso8601String(),
+      ],
+    );
+    if (rows.isEmpty) {
+      throw StateError('Manager approval is required for this action');
+    }
+
+    final approvalId = rows.single['id']! as String;
+    final consumptionId = _uuid.v4();
+    final requestId = _uuid.v4();
+    await executor.insert('approval_consumption', {
+      'id': consumptionId,
+      'approval_request_id': approvalId,
+      'consumed_by_employee_id': context.userId,
+      'action_fingerprint': actionFingerprint,
+      'consumed_at': now.toIso8601String(),
+      'request_id': requestId,
+    });
+
+    await executor.insert('sync_outbox', {
+      'id': _uuid.v4(),
+      'entity_type': 'approval_consumption',
+      'entity_id': consumptionId,
+      'organization_id': context.organizationId,
+      'business_id': context.businessId,
+      'store_id': context.storeId,
+      'terminal_id': context.terminalId,
+      'idempotency_key': 'approval-consumption:$approvalId',
+      'payload_json': jsonEncode({
+        'approvalConsumptionId': consumptionId,
+        'approvalRequestId': approvalId,
+        'consumedByUserId': context.userId,
+        'actionFingerprint': actionFingerprint,
+        'consumedAt': now.toIso8601String(),
+        'requestId': requestId,
+      }),
+      'state': 'pending',
+      'created_at': now.toIso8601String(),
+    });
+
+    await _appendAuditEvent(
+      executor,
+      context: context,
+      action: 'approval.consumed',
+      entityType: 'approval_request',
+      entityId: approvalId,
+      occurredAt: now,
+      metadata: {
+        'actionType': actionType,
+        'targetEntityType': entityType,
+        'targetEntityId': entityId,
+      },
+    );
+    return approvalId;
+  }
+
   Future<int> pendingApprovalCount() async {
     final rows = await _database.rawQuery(
       "SELECT COUNT(*) AS count FROM approval_request WHERE status = 'pending'",
@@ -4821,7 +5253,24 @@ class LocalPosDatabase {
       }
 
       if (role == 'cashier' && total > cashierApprovalThresholdMinor) {
-        throw StateError('Manager approval is required for this refund');
+        final fingerprint = buildApprovalFingerprint(
+          actionType: 'refund',
+          entityId: saleId,
+          facts: [
+            for (final request in requests)
+              '${request.saleLineId}:${request.quantityMilli}',
+            'amount:$total',
+          ],
+        );
+        await _consumeApproval(
+          txn,
+          context: context,
+          actionType: 'refund',
+          entityType: 'sale',
+          entityId: saleId,
+          actionFingerprint: fingerprint,
+          now: now,
+        );
       }
       if (role == 'stock_worker') {
         throw StateError('This role cannot refund sales');
