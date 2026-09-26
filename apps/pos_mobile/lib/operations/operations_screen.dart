@@ -22,7 +22,8 @@ class _OperationsScreenState extends State<OperationsScreen> {
   List<LocalEmployee> employees = const [];
   List<LocalExpense> expenses = const [];
   LocalShift? shift;
-  int pendingApprovals = 0;
+  List<LocalApprovalRequest> pendingApprovalItems = const [];
+  bool canReviewApprovals = false;
   bool loading = true;
 
   @override
@@ -35,13 +36,22 @@ class _OperationsScreenState extends State<OperationsScreen> {
     final loadedEmployees = await widget.database.listEmployees();
     final loadedExpenses = await widget.database.listExpenses();
     final current = await widget.database.currentShift();
-    final approvals = await widget.database.pendingApprovalCount();
+    final canReview = await widget.database.canResolveApprovals(
+      widget.saleContext,
+    );
+    final approvals = canReview
+        ? await widget.database.listApprovalRequests(
+            context: widget.saleContext,
+            status: LocalApprovalStatus.pending,
+          )
+        : const <LocalApprovalRequest>[];
     if (!mounted) return;
     setState(() {
       employees = loadedEmployees;
       expenses = loadedExpenses;
       shift = current;
-      pendingApprovals = approvals;
+      canReviewApprovals = canReview;
+      pendingApprovalItems = approvals;
       loading = false;
     });
   }
@@ -418,6 +428,87 @@ class _OperationsScreenState extends State<OperationsScreen> {
     if (saved == true) await refresh();
   }
 
+  Future<void> reviewApproval(LocalApprovalRequest approval) async {
+    if (!canReviewApprovals) return;
+
+    final decision = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Review approval'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(_approvalActionLabel(approval.actionType)),
+            const SizedBox(height: 8),
+            Text('Requested by ${approval.requestedByName}'),
+            if (approval.requestedAmountMinor != null)
+              Text(
+                'Amount ${formatInr(approval.requestedAmountMinor!)}',
+              ),
+            if (approval.reason?.trim().isNotEmpty ?? false) ...[
+              const SizedBox(height: 8),
+              Text(approval.reason!),
+            ],
+            if (approval.expiresAt != null) ...[
+              const SizedBox(height: 8),
+              Text(
+                approval.isExpired
+                    ? 'This request has expired.'
+                    : 'Expires ${approval.expiresAt!.toLocal()}',
+              ),
+            ],
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext),
+            child: const Text('Cancel'),
+          ),
+          OutlinedButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('Reject'),
+          ),
+          FilledButton(
+            onPressed: approval.isExpired
+                ? null
+                : () => Navigator.pop(dialogContext, true),
+            child: const Text('Approve'),
+          ),
+        ],
+      ),
+    );
+
+    if (decision == null) return;
+
+    try {
+      await widget.database.resolveApprovalRequest(
+        context: widget.saleContext,
+        approvalRequestId: approval.id,
+        approve: decision,
+      );
+      await refresh();
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            decision
+                ? 'Approval granted. The requester can retry the action.'
+                : 'Approval rejected.',
+          ),
+        ),
+      );
+    } on Object catch (error) {
+      if (!mounted) return;
+      final message = error.toString().contains('own approval')
+          ? 'You cannot resolve your own approval request.'
+          : 'Approval could not be updated. Refresh and try again.';
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(message)),
+      );
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     if (loading) return const Center(child: CircularProgressIndicator());
@@ -427,12 +518,35 @@ class _OperationsScreenState extends State<OperationsScreen> {
       child: ListView(
         padding: const EdgeInsets.all(16),
         children: [
-          if (pendingApprovals > 0)
+          if (canReviewApprovals && pendingApprovalItems.isNotEmpty)
             Card(
-              child: ListTile(
+              child: ExpansionTile(
                 leading: const Icon(Icons.verified_user_outlined),
-                title: Text('$pendingApprovals approval item needs review'),
-                subtitle: const Text('Cash variance or another sensitive action.'),
+                title: Text(
+                  '${pendingApprovalItems.length} approval '
+                  '${pendingApprovalItems.length == 1 ? 'item' : 'items'} '
+                  'need review',
+                ),
+                subtitle: const Text(
+                  'Review sensitive refunds, cash differences and other requests.',
+                ),
+                children: [
+                  for (final approval in pendingApprovalItems)
+                    ListTile(
+                      title: Text(_approvalActionLabel(approval.actionType)),
+                      subtitle: Text(
+                        [
+                          'Requested by ${approval.requestedByName}',
+                          if (approval.requestedAmountMinor != null)
+                            formatInr(approval.requestedAmountMinor!),
+                          if (approval.reason?.trim().isNotEmpty ?? false)
+                            approval.reason!,
+                        ].join(' • '),
+                      ),
+                      trailing: const Icon(Icons.chevron_right),
+                      onTap: () => reviewApproval(approval),
+                    ),
+                ],
               ),
             ),
           Card(
@@ -542,6 +656,14 @@ class _OperationsScreenState extends State<OperationsScreen> {
     );
   }
 }
+
+String _approvalActionLabel(String actionType) => switch (actionType) {
+      'refund' => 'Refund approval',
+      'cash_variance' => 'Cash difference review',
+      'discount' => 'Discount approval',
+      'stock_adjustment' => 'Stock adjustment approval',
+      _ => 'Sensitive action approval',
+    };
 
 String _roleLabel(EmployeeRole role) => switch (role) {
       EmployeeRole.owner => 'Owner',
