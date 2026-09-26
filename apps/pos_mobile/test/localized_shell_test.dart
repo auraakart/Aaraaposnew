@@ -22,7 +22,9 @@ void main() {
     await database.updatePreferredLocaleCode('hi');
 
     await tester.pumpWidget(AaraaPosApp(database: database));
-    await tester.pumpAndSettle();
+    for (var i = 0; i < 8; i++) {
+      await tester.pump(const Duration(milliseconds: 25));
+    }
 
     expect(find.text('आज का कारोबार'), findsOneWidget);
     expect(find.text('बिक्री'), findsOneWidget);
