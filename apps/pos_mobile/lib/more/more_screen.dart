@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../accounting/accounting_export_screen.dart';
+import '../audit/audit_history_screen.dart';
 import '../commerce/commerce_orders_screen.dart';
 import '../hardware/hardware_status_screen.dart';
 import '../l10n/app_strings.dart';
@@ -28,6 +29,29 @@ class MoreScreen extends StatelessWidget {
     return ListView(
       padding: const EdgeInsets.all(16),
       children: [
+        Card(
+          child: ListTile(
+            leading: const Icon(Icons.history_outlined),
+            title: const Text('Audit History'),
+            subtitle: const Text(
+              'Owner/Manager history for critical sales, stock and cash actions',
+            ),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () {
+              Navigator.of(context).push(
+                MaterialPageRoute<void>(
+                  builder: (_) => Scaffold(
+                    appBar: AppBar(title: const Text('Audit History')),
+                    body: AuditHistoryScreen(
+                      database: database,
+                      saleContext: saleContext,
+                    ),
+                  ),
+                ),
+              );
+            },
+          ),
+        ),
         Card(
           child: ListTile(
             leading: const Icon(Icons.translate_outlined),
