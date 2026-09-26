@@ -1,5 +1,13 @@
 # Release Notes
 
+## V2.11 Observability & Diagnostics Foundation — validation
+
+Added hardened request correlation, query-safe structured JSON logs, sensitive-detail redaction, process-scoped health/readiness, and an Owner/Manager-only PII-free local diagnostics screen with SQLite integrity, schema and sync-state evidence.
+
+No external log/APM/SIEM provider, production database readiness or remote telemetry is claimed.
+
+# Release Notes
+
 ## V2.10 Quality & Security Gates — validation
 
 Added migration ordering/destructive-SQL policy checks, dependency-source and committed-secret hygiene checks, explicit npm high/critical vulnerability audit, and low-noise weekly Dependabot updates for npm/pub.
@@ -136,6 +144,7 @@ Not claimed:
 - tax filing gateways or regulatory certification
 - physical hardware certification
 - production credentials, hosting or deployment
+
 
 
 
