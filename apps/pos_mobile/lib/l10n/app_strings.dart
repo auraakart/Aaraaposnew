@@ -65,6 +65,10 @@ class AppStrings {
   String get english => _value('english');
   String get hindi => _value('hindi');
   String get tamil => _value('tamil');
+  String get systemDefault => _value('systemDefault');
+  String get accessibilityDetail => _value('accessibilityDetail');
+  String get preparedLanguagesDetail => _value('preparedLanguagesDetail');
+  String get addItemsToBill => _value('addItemsToBill');
 
   static const _translations = <String, Map<String, String>>{
     'en': {
@@ -94,6 +98,12 @@ class AppStrings {
       'english': 'English',
       'hindi': 'Hindi',
       'tamil': 'Tamil',
+      'systemDefault': 'System default',
+      'accessibilityDetail':
+          'Text scaling follows Android/iOS accessibility settings. Primary actions keep large touch targets and visible labels.',
+      'preparedLanguagesDetail':
+          'Prepared languages are not marked supported until translated and reviewed.',
+      'addItemsToBill': 'Add items to bill',
     },
     'hi': {
       'appTitle': 'AaraaPOS',
@@ -122,6 +132,12 @@ class AppStrings {
       'english': 'अंग्रेज़ी',
       'hindi': 'हिन्दी',
       'tamil': 'तमिल',
+      'systemDefault': 'सिस्टम की भाषा',
+      'accessibilityDetail':
+          'टेक्स्ट आकार Android/iOS की पहुँच सेटिंग का पालन करता है। मुख्य बटन बड़े और स्पष्ट रहते हैं।',
+      'preparedLanguagesDetail':
+          'तैयार भाषाओं को अनुवाद और समीक्षा पूरी होने तक समर्थित नहीं माना जाता।',
+      'addItemsToBill': 'बिल में सामान जोड़ें',
     },
     'ta': {
       'appTitle': 'AaraaPOS',
@@ -150,6 +166,12 @@ class AppStrings {
       'english': 'ஆங்கிலம்',
       'hindi': 'இந்தி',
       'tamil': 'தமிழ்',
+      'systemDefault': 'சாதன இயல்புநிலை',
+      'accessibilityDetail':
+          'எழுத்து அளவு Android/iOS அணுகல் அமைப்பைப் பின்பற்றுகிறது. முக்கிய செயல்கள் பெரிய தொடு பகுதிகளும் தெளிவான பெயர்களும் கொண்டுள்ளன.',
+      'preparedLanguagesDetail':
+          'மொழிபெயர்ப்பு மற்றும் மதிப்பாய்வு முடியும் வரை தயாராக உள்ள மொழிகள் ஆதரிக்கப்படுவதாகக் குறிக்கப்படாது.',
+      'addItemsToBill': 'பில்லில் பொருட்களைச் சேர்க்கவும்',
     },
   };
 }
