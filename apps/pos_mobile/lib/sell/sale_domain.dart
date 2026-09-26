@@ -2,6 +2,22 @@ enum TaxMode { intraState, interState }
 
 enum TaxPriceMode { inclusive, exclusive }
 
+enum TaxClassificationType { hsn, sac, other }
+
+String taxClassificationTypeValue(TaxClassificationType value) => switch (value) {
+      TaxClassificationType.hsn => 'hsn',
+      TaxClassificationType.sac => 'sac',
+      TaxClassificationType.other => 'other',
+    };
+
+TaxClassificationType? taxClassificationTypeFromValue(String? value) =>
+    switch (value) {
+      'hsn' => TaxClassificationType.hsn,
+      'sac' => TaxClassificationType.sac,
+      'other' => TaxClassificationType.other,
+      _ => null,
+    };
+
 class Product {
   const Product({
     required this.id,
@@ -10,6 +26,9 @@ class Product {
     required this.taxRateBps,
     required this.taxPriceMode,
     this.barcode,
+    this.taxClassificationType,
+    this.taxClassificationCode,
+    this.taxRuleVersionId,
   });
 
   final String id;
@@ -18,6 +37,9 @@ class Product {
   final int unitPriceMinor;
   final int taxRateBps;
   final TaxPriceMode taxPriceMode;
+  final TaxClassificationType? taxClassificationType;
+  final String? taxClassificationCode;
+  final String? taxRuleVersionId;
 }
 
 class SaleLineInput {
