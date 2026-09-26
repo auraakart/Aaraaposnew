@@ -41,10 +41,10 @@ export function requestPath(rawUrl: string | undefined): string {
 }
 
 export function createRequestContext(input: {
-  requestIdHeader?: string;
-  method?: string;
-  url?: string;
-  nowMs?: number;
+  requestIdHeader?: string | undefined;
+  method?: string | undefined;
+  url?: string | undefined;
+  nowMs?: number | undefined;
 }): RequestContext {
   return {
     requestId: normalizeRequestId(input.requestIdHeader),
