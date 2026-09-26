@@ -3,6 +3,8 @@ import 'package:flutter/material.dart';
 import '../accounting/accounting_export_screen.dart';
 import '../commerce/commerce_orders_screen.dart';
 import '../hardware/hardware_status_screen.dart';
+import '../l10n/app_strings.dart';
+import '../l10n/language_accessibility_screen.dart';
 import '../loyalty/loyalty_promotions_screen.dart';
 import '../multistore/store_scope_screen.dart';
 import '../operations/operations_screen.dart';
@@ -26,6 +28,30 @@ class MoreScreen extends StatelessWidget {
     return ListView(
       padding: const EdgeInsets.all(16),
       children: [
+        Card(
+          child: ListTile(
+            leading: const Icon(Icons.translate_outlined),
+            title: Text(AppStrings.of(context).languageAccessibility),
+            subtitle: const Text(
+              'English, Hindi and Tamil shell support with device text scaling',
+            ),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () {
+              Navigator.of(context).push(
+                MaterialPageRoute<void>(
+                  builder: (_) => Scaffold(
+                    appBar: AppBar(
+                      title: Text(
+                        AppStrings.of(context).languageAccessibility,
+                      ),
+                    ),
+                    body: LanguageAccessibilityScreen(database: database),
+                  ),
+                ),
+              );
+            },
+          ),
+        ),
         Card(
           child: ListTile(
             leading: const Icon(Icons.devices_other_outlined),
