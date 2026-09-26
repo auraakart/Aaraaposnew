@@ -11,6 +11,7 @@ import '../loyalty/loyalty_promotions_screen.dart';
 import '../multistore/store_scope_screen.dart';
 import '../operations/operations_screen.dart';
 import '../purchases/purchases_screen.dart';
+import '../recovery/recovery_readiness_screen.dart';
 import '../returns/returns_screen.dart';
 import '../sell/local_pos_database.dart';
 import '../sync/integration_status_screen.dart';
@@ -30,6 +31,29 @@ class MoreScreen extends StatelessWidget {
     return ListView(
       padding: const EdgeInsets.all(16),
       children: [
+        Card(
+          child: ListTile(
+            leading: const Icon(Icons.restore_outlined),
+            title: const Text('Recovery Readiness'),
+            subtitle: const Text(
+              'Check local integrity and restore blockers without changing data',
+            ),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () {
+              Navigator.of(context).push(
+                MaterialPageRoute<void>(
+                  builder: (_) => Scaffold(
+                    appBar: AppBar(title: const Text('Recovery Readiness')),
+                    body: RecoveryReadinessScreen(
+                      database: database,
+                      saleContext: saleContext,
+                    ),
+                  ),
+                ),
+              );
+            },
+          ),
+        ),
         Card(
           child: ListTile(
             leading: const Icon(Icons.monitor_heart_outlined),
