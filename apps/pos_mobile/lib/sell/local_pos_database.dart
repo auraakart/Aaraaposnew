@@ -5260,6 +5260,50 @@ class LocalPosDatabase {
     return (rows.single['count'] as int?) ?? 0;
   }
 
+  Future<List<SaleTaxSnapshot>> saleTaxSnapshots(String saleId) async {
+    final normalized = saleId.trim();
+    if (normalized.isEmpty) {
+      throw ArgumentError('saleId is required');
+    }
+
+    final rows = await _database.query(
+      'sale_line',
+      columns: [
+        'id',
+        'product_id',
+        'tax_rate_bps_snapshot',
+        'tax_price_mode_snapshot',
+        'tax_classification_type_snapshot',
+        'tax_classification_code_snapshot',
+        'tax_rule_version_id_snapshot',
+      ],
+      where: 'sale_id = ?',
+      whereArgs: [normalized],
+      orderBy: 'id',
+    );
+
+    return rows
+        .map(
+          (row) => SaleTaxSnapshot(
+            saleLineId: row['id']! as String,
+            productId: row['product_id']! as String,
+            rateBps: row['tax_rate_bps_snapshot'] as int?,
+            priceMode: switch (row['tax_price_mode_snapshot']) {
+              'inclusive' => TaxPriceMode.inclusive,
+              'exclusive' => TaxPriceMode.exclusive,
+              _ => null,
+            },
+            classificationType: taxClassificationTypeFromValue(
+              row['tax_classification_type_snapshot'] as String?,
+            ),
+            classificationCode:
+                row['tax_classification_code_snapshot'] as String?,
+            taxRuleVersionId: row['tax_rule_version_id_snapshot'] as String?,
+          ),
+        )
+        .toList();
+  }
+
   Future<int> paymentEventCountForSale(String saleId) async {
     final rows = await _database.rawQuery(
       '''
