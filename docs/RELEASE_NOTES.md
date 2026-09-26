@@ -1,5 +1,13 @@
 # Release Notes
 
+## V2.12 Data Resilience & Recovery Foundation — validation
+
+Added encrypted recovery-checkpoint contracts, SHA-256 content verification, tenant/store/schema/RPO safety assessment, recovery checkpoint/rehearsal persistence, and an Owner/Manager-only non-destructive local recovery-readiness view.
+
+Production encrypted backup storage, key management, scheduled backup creation, destructive restore orchestration and measured RPO/RTO remain explicit external gaps.
+
+# Release Notes
+
 ## V2.11 Observability & Diagnostics Foundation — validation
 
 Added hardened request correlation, query-safe structured JSON logs, sensitive-detail redaction, process-scoped health/readiness, and an Owner/Manager-only PII-free local diagnostics screen with SQLite integrity, schema and sync-state evidence.
@@ -144,6 +152,7 @@ Not claimed:
 - tax filing gateways or regulatory certification
 - physical hardware certification
 - production credentials, hosting or deployment
+
 
 
 
