@@ -2526,7 +2526,7 @@ class LocalPosDatabase {
         }),
         'state': 'pending',
         'created_at': now.toIso8601String(),
-      })
+      });
       await _appendAuditEvent(
         txn,
         context: context,
@@ -2535,7 +2535,7 @@ class LocalPosDatabase {
         entityId: entryId,
         occurredAt: now,
         metadata: {'supplierId': supplierId, 'amountMinor': amountMinor, 'paymentMethod': paymentMethod},
-      );;
+      );
     });
   }
 
@@ -2619,7 +2619,7 @@ class LocalPosDatabase {
         }),
         'state': 'pending',
         'created_at': now.toIso8601String(),
-      })
+      });
       await _appendAuditEvent(
         txn,
         context: context,
@@ -2628,7 +2628,7 @@ class LocalPosDatabase {
         entityId: employee.id,
         occurredAt: now,
         metadata: {'reference': employee.name, 'role': employeeRoleValue(employee.role)},
-      );;
+      );
     });
     return employee;
   }
@@ -2704,7 +2704,7 @@ class LocalPosDatabase {
         }),
         'state': 'pending',
         'created_at': now.toIso8601String(),
-      })
+      });
       await _appendAuditEvent(
         txn,
         context: context,
@@ -2713,7 +2713,7 @@ class LocalPosDatabase {
         entityId: shiftId,
         occurredAt: now,
         metadata: {'reference': employeeName, 'openingCashMinor': openingCashMinor},
-      );;
+      );
     });
 
     return LocalShift(
@@ -2817,7 +2817,7 @@ class LocalPosDatabase {
         }),
         'state': 'pending',
         'created_at': now.toIso8601String(),
-      })
+      });
       await _appendAuditEvent(
         txn,
         context: context,
@@ -2826,7 +2826,7 @@ class LocalPosDatabase {
         entityId: movementId,
         occurredAt: now,
         metadata: {'movementType': movementType, 'amountMinor': amountMinor},
-      );;
+      );
     });
   }
 
@@ -2881,7 +2881,7 @@ class LocalPosDatabase {
         }),
         'state': 'pending',
         'created_at': now.toIso8601String(),
-      })
+      });
       await _appendAuditEvent(
         txn,
         context: context,
@@ -2890,7 +2890,7 @@ class LocalPosDatabase {
         entityId: expenseId,
         occurredAt: now,
         metadata: {'reference': category.trim(), 'amountMinor': amountMinor, 'paymentMethod': paymentMethod},
-      );;
+      );
     });
 
     return LocalExpense(
@@ -3051,7 +3051,7 @@ class LocalPosDatabase {
         }),
         'state': 'pending',
         'created_at': now.toIso8601String(),
-      })
+      });
       await _appendAuditEvent(
         txn,
         context: context,
@@ -3060,7 +3060,7 @@ class LocalPosDatabase {
         entityId: shiftId,
         occurredAt: now,
         metadata: {'expectedCashMinor': expected, 'actualCashMinor': actualClosingCashMinor, 'varianceMinor': variance},
-      );;
+      );
 
       closed = LocalShift(
         id: shiftId,
@@ -4936,7 +4936,7 @@ class LocalPosDatabase {
         }),
         'state': 'pending',
         'created_at': now.toIso8601String(),
-      })
+      });
       await _appendAuditEvent(
         txn,
         context: context,
@@ -4945,7 +4945,7 @@ class LocalPosDatabase {
         entityId: returnId,
         occurredAt: now,
         metadata: {'reference': returnNumber, 'saleId': saleId, 'refundMinor': total},
-      );;
+      );
     });
 
     return OfflineReturnResult(
@@ -5706,7 +5706,7 @@ class LocalPosDatabase {
         }),
         'state': 'pending',
         'created_at': now.toIso8601String(),
-      })
+      });
       await _appendAuditEvent(
         txn,
         context: context,
@@ -5715,7 +5715,7 @@ class LocalPosDatabase {
         entityId: saleId,
         occurredAt: now,
         metadata: {'reference': invoiceNumber, 'paymentMethod': paymentMethod, 'totalMinor': totals.totalMinor},
-      );;
+      );
     });
 
     final receipt = StringBuffer()
