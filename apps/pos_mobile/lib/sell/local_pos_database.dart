@@ -399,7 +399,10 @@ class LocalPosDatabase {
               discount_source TEXT,
               discount_reference_id TEXT,
               tax_rate_bps INTEGER NOT NULL,
-              tax_price_mode TEXT NOT NULL
+              tax_price_mode TEXT NOT NULL,
+              tax_classification_type TEXT,
+              tax_classification_code TEXT,
+              tax_rule_version_id TEXT
             )
           ''');
           await db.execute('''
@@ -1061,6 +1064,15 @@ class LocalPosDatabase {
             await db.execute(
               'ALTER TABLE sale_line ADD COLUMN tax_rule_version_id_snapshot TEXT',
             );
+            await db.execute(
+              'ALTER TABLE held_sale_line ADD COLUMN tax_classification_type TEXT',
+            );
+            await db.execute(
+              'ALTER TABLE held_sale_line ADD COLUMN tax_classification_code TEXT',
+            );
+            await db.execute(
+              'ALTER TABLE held_sale_line ADD COLUMN tax_rule_version_id TEXT',
+            );
           }
         },
       ),
@@ -1403,6 +1415,12 @@ class LocalPosDatabase {
                 taxPriceMode: row['tax_price_mode'] == 'exclusive'
                     ? TaxPriceMode.exclusive
                     : TaxPriceMode.inclusive,
+                taxClassificationType: taxClassificationTypeFromValue(
+                  row['tax_classification_type'] as String?,
+                ),
+                taxClassificationCode:
+                    row['tax_classification_code'] as String?,
+                taxRuleVersionId: row['tax_rule_version_id'] as String?,
               ),
               quantityMilli: row['quantity_milli']! as int,
               quotedUnitPriceMinor:
@@ -4457,6 +4475,13 @@ class LocalPosDatabase {
           'tax_price_mode': line.product.taxPriceMode == TaxPriceMode.exclusive
               ? 'exclusive'
               : 'inclusive',
+          'tax_classification_type': line.product.taxClassificationType == null
+              ? null
+              : taxClassificationTypeValue(
+                  line.product.taxClassificationType!,
+                ),
+          'tax_classification_code': line.product.taxClassificationCode,
+          'tax_rule_version_id': line.product.taxRuleVersionId,
         });
       }
     });
