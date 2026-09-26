@@ -2,7 +2,7 @@
 
 ## V2.10 Quality & Security Gates — validation
 
-Added migration ordering/destructive-SQL policy checks, dependency-source and committed-secret hygiene checks, PR dependency vulnerability review, and low-noise weekly Dependabot updates for npm/pub.
+Added migration ordering/destructive-SQL policy checks, dependency-source and committed-secret hygiene checks, explicit npm high/critical vulnerability audit, and low-noise weekly Dependabot updates for npm/pub.
 
 Android build/signing and full lockfile reproducibility remain explicit repository gaps because the current repository has no Android platform scaffold and no committed npm/pub lockfiles.
 
