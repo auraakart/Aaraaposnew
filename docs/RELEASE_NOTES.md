@@ -1,5 +1,13 @@
 # Release Notes
 
+## V2.10 Quality & Security Gates — validation
+
+Added migration ordering/destructive-SQL policy checks, dependency-source and committed-secret hygiene checks, explicit npm high/critical vulnerability audit, and low-noise weekly Dependabot updates for npm/pub.
+
+Android build/signing and full lockfile reproducibility remain explicit repository gaps because the current repository has no Android platform scaffold and no committed npm/pub lockfiles.
+
+# Release Notes
+
 ## V2.9 Audit & Governance Foundation — validation
 
 Added append-oriented local audit evidence for critical committed actions, atomic audit/outbox recording, Owner/Manager-only Audit History, server audit validation and sensitive-metadata rejection, terminal/outcome evidence, and regression tests.
@@ -128,6 +136,7 @@ Not claimed:
 - tax filing gateways or regulatory certification
 - physical hardware certification
 - production credentials, hosting or deployment
+
 
 
 
