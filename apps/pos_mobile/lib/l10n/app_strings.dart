@@ -27,8 +27,14 @@ class AppStrings {
 
   static AppStrings of(BuildContext context) {
     final strings = Localizations.of<AppStrings>(context, AppStrings);
-    assert(strings != null, 'AppStrings not found in context');
-    return strings!;
+    if (strings != null) return strings;
+
+    final locale = Localizations.maybeLocaleOf(context) ?? const Locale('en');
+    return AppStrings(
+      isSupportedCode(locale.languageCode)
+          ? Locale(locale.languageCode)
+          : const Locale('en'),
+    );
   }
 
   static bool isSupportedCode(String? code) =>
