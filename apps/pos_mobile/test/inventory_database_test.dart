@@ -52,7 +52,15 @@ void main() {
     inventory = await database.listInventory();
     expect(inventory.single.onHandMilli, 2500);
     expect(inventory.single.health, StockHealth.low);
-    expect(await database.pendingOutboxCount(), 3);
+    final outbox = await database.listOutboxItems();
+    expect(
+      outbox.where((item) => item.entityType != 'audit_event').length,
+      3,
+    );
+    expect(
+      outbox.where((item) => item.entityType == 'audit_event').length,
+      3,
+    );
   });
 
   test('damage and loss require reasons', () async {

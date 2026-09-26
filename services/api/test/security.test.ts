@@ -70,3 +70,11 @@ test("cashier can manage commerce orders but stock worker cannot", () => {
   assert.equal(hasPermission("cashier", "commerce:manage"), true);
   assert.equal(hasPermission("stock_worker", "commerce:manage"), false);
 });
+
+
+test("audit history is owner/manager only", () => {
+  assert.equal(hasPermission("owner", "audit:read"), true);
+  assert.equal(hasPermission("manager", "audit:read"), true);
+  assert.equal(hasPermission("cashier", "audit:read"), false);
+  assert.equal(hasPermission("stock_worker", "audit:read"), false);
+});

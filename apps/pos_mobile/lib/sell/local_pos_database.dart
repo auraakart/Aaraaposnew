@@ -5,6 +5,7 @@ import 'package:sqflite/sqflite.dart';
 import 'package:uuid/uuid.dart';
 
 import '../accounting/accounting_domain.dart';
+import '../audit/audit_domain.dart';
 import '../ai/ai_domain.dart';
 import '../commerce/commerce_domain.dart';
 import '../customers/customer_domain.dart';
@@ -95,7 +96,7 @@ class LocalPosDatabase {
     _db = await _factory.openDatabase(
       path,
       options: OpenDatabaseOptions(
-        version: 11,
+        version: 12,
         onConfigure: (db) async {
           await db.execute('PRAGMA foreign_keys = ON');
         },
@@ -530,6 +531,22 @@ class LocalPosDatabase {
               last_attempt_at TEXT,
               last_error TEXT
             )
+          ''');
+          await db.execute('''
+            CREATE TABLE local_audit_event (
+              id TEXT PRIMARY KEY,
+              actor_user_id TEXT NOT NULL,
+              action TEXT NOT NULL,
+              entity_type TEXT NOT NULL,
+              entity_id TEXT NOT NULL,
+              occurred_at TEXT NOT NULL,
+              outcome TEXT NOT NULL,
+              metadata_json TEXT NOT NULL DEFAULT '{}'
+            )
+          ''');
+          await db.execute('''
+            CREATE INDEX local_audit_time_idx
+            ON local_audit_event (occurred_at DESC)
           ''');
           await db.execute('''
             CREATE TABLE commerce_order (
@@ -992,6 +1009,24 @@ class LocalPosDatabase {
               "ALTER TABLE local_context ADD COLUMN preferred_locale_code TEXT",
             );
           }
+          if (oldVersion < 12) {
+            await db.execute('''
+              CREATE TABLE local_audit_event (
+                id TEXT PRIMARY KEY,
+                actor_user_id TEXT NOT NULL,
+                action TEXT NOT NULL,
+                entity_type TEXT NOT NULL,
+                entity_id TEXT NOT NULL,
+                occurred_at TEXT NOT NULL,
+                outcome TEXT NOT NULL,
+                metadata_json TEXT NOT NULL DEFAULT '{}'
+              )
+            ''');
+            await db.execute('''
+              CREATE INDEX local_audit_time_idx
+              ON local_audit_event (occurred_at DESC)
+            ''');
+          }
         },
       ),
     );
@@ -1453,6 +1488,91 @@ class LocalPosDatabase {
         'created_at': now.toIso8601String(),
       });
     });
+  }
+
+  Future<void> _appendAuditEvent(
+    DatabaseExecutor executor, {
+    required LocalSaleContext context,
+    required String action,
+    required String entityType,
+    required String entityId,
+    required DateTime occurredAt,
+    String outcome = 'success',
+    Map<String, Object?> metadata = const {},
+  }) async {
+    final eventId = _uuid.v4();
+    final idempotencyKey = 'audit:$eventId';
+    await executor.insert('local_audit_event', {
+      'id': eventId,
+      'actor_user_id': context.userId,
+      'action': action,
+      'entity_type': entityType,
+      'entity_id': entityId,
+      'occurred_at': occurredAt.toUtc().toIso8601String(),
+      'outcome': outcome,
+      'metadata_json': jsonEncode(metadata),
+    });
+    await executor.insert('sync_outbox', {
+      'id': _uuid.v4(),
+      'entity_type': 'audit_event',
+      'entity_id': eventId,
+      'organization_id': context.organizationId,
+      'business_id': context.businessId,
+      'store_id': context.storeId,
+      'terminal_id': context.terminalId,
+      'idempotency_key': idempotencyKey,
+      'payload_json': jsonEncode({
+        'auditEventId': eventId,
+        'actorUserId': context.userId,
+        'action': action,
+        'affectedEntityType': entityType,
+        'affectedEntityId': entityId,
+        'occurredAt': occurredAt.toUtc().toIso8601String(),
+        'outcome': outcome,
+        'metadata': metadata,
+      }),
+      'state': 'pending',
+      'created_at': occurredAt.toUtc().toIso8601String(),
+    });
+  }
+
+  Future<bool> canReadAudit(LocalSaleContext context) async {
+    final rows = await _database.query(
+      'employee',
+      columns: ['role'],
+      where: 'id = ? AND active = 1',
+      whereArgs: [context.userId],
+      limit: 1,
+    );
+    if (rows.isEmpty) return false;
+    final role = rows.single['role']! as String;
+    return role == 'owner' || role == 'manager';
+  }
+
+  Future<List<LocalAuditEvent>> listAuditEvents({int limit = 200}) async {
+    if (limit <= 0 || limit > 1000) {
+      throw ArgumentError('Audit limit must be between 1 and 1000');
+    }
+    final rows = await _database.query(
+      'local_audit_event',
+      orderBy: 'occurred_at DESC, id DESC',
+      limit: limit,
+    );
+    return rows.map((row) {
+      final decoded = jsonDecode(row['metadata_json']! as String);
+      return LocalAuditEvent(
+        id: row['id']! as String,
+        actorUserId: row['actor_user_id']! as String,
+        action: row['action']! as String,
+        entityType: row['entity_type']! as String,
+        entityId: row['entity_id']! as String,
+        occurredAt: DateTime.parse(row['occurred_at']! as String),
+        outcome: row['outcome']! as String,
+        metadata: decoded is Map
+            ? Map<String, Object?>.from(decoded)
+            : const {},
+      );
+    }).toList();
   }
 
   Future<LoyaltyProgram> loyaltyProgram() async {
@@ -2420,6 +2540,15 @@ class LocalPosDatabase {
         'state': 'pending',
         'created_at': now.toIso8601String(),
       });
+      await _appendAuditEvent(
+        txn,
+        context: context,
+        action: 'supplier.paid',
+        entityType: 'supplier_ledger_entry',
+        entityId: entryId,
+        occurredAt: now,
+        metadata: {'supplierId': supplierId, 'amountMinor': amountMinor, 'paymentMethod': paymentMethod},
+      );
     });
   }
 
@@ -2504,6 +2633,15 @@ class LocalPosDatabase {
         'state': 'pending',
         'created_at': now.toIso8601String(),
       });
+      await _appendAuditEvent(
+        txn,
+        context: context,
+        action: 'employee.created',
+        entityType: 'employee',
+        entityId: employee.id,
+        occurredAt: now,
+        metadata: {'reference': employee.name, 'role': employeeRoleValue(employee.role)},
+      );
     });
     return employee;
   }
@@ -2580,6 +2718,15 @@ class LocalPosDatabase {
         'state': 'pending',
         'created_at': now.toIso8601String(),
       });
+      await _appendAuditEvent(
+        txn,
+        context: context,
+        action: 'shift.opened',
+        entityType: 'shift',
+        entityId: shiftId,
+        occurredAt: now,
+        metadata: {'reference': employeeName, 'openingCashMinor': openingCashMinor},
+      );
     });
 
     return LocalShift(
@@ -2684,6 +2831,15 @@ class LocalPosDatabase {
         'state': 'pending',
         'created_at': now.toIso8601String(),
       });
+      await _appendAuditEvent(
+        txn,
+        context: context,
+        action: 'cash.movement',
+        entityType: 'cash_movement',
+        entityId: movementId,
+        occurredAt: now,
+        metadata: {'movementType': movementType, 'amountMinor': amountMinor},
+      );
     });
   }
 
@@ -2739,6 +2895,15 @@ class LocalPosDatabase {
         'state': 'pending',
         'created_at': now.toIso8601String(),
       });
+      await _appendAuditEvent(
+        txn,
+        context: context,
+        action: 'expense.recorded',
+        entityType: 'expense',
+        entityId: expenseId,
+        occurredAt: now,
+        metadata: {'reference': category.trim(), 'amountMinor': amountMinor, 'paymentMethod': paymentMethod},
+      );
     });
 
     return LocalExpense(
@@ -2900,6 +3065,15 @@ class LocalPosDatabase {
         'state': 'pending',
         'created_at': now.toIso8601String(),
       });
+      await _appendAuditEvent(
+        txn,
+        context: context,
+        action: 'shift.closed',
+        entityType: 'shift',
+        entityId: shiftId,
+        occurredAt: now,
+        metadata: {'expectedCashMinor': expected, 'actualCashMinor': actualClosingCashMinor, 'varianceMinor': variance},
+      );
 
       closed = LocalShift(
         id: shiftId,
@@ -4776,6 +4950,15 @@ class LocalPosDatabase {
         'state': 'pending',
         'created_at': now.toIso8601String(),
       });
+      await _appendAuditEvent(
+        txn,
+        context: context,
+        action: 'sale.returned',
+        entityType: 'sale_return',
+        entityId: returnId,
+        occurredAt: now,
+        metadata: {'reference': returnNumber, 'saleId': saleId, 'refundMinor': total},
+      );
     });
 
     return OfflineReturnResult(
@@ -5065,6 +5248,19 @@ class LocalPosDatabase {
       'state': 'pending',
       'created_at': now.toIso8601String(),
     });
+    await _appendAuditEvent(
+      executor,
+      context: context,
+      action: 'stock.movement',
+      entityType: 'stock_movement',
+      entityId: movementId,
+      occurredAt: now,
+      metadata: {
+        'productId': productId,
+        'movementType': stockMovementTypeValue(type),
+        'quantityDeltaMilli': quantityDeltaMilli,
+      },
+    );
     return movementId;
   }
 
@@ -5524,6 +5720,15 @@ class LocalPosDatabase {
         'state': 'pending',
         'created_at': now.toIso8601String(),
       });
+      await _appendAuditEvent(
+        txn,
+        context: context,
+        action: 'sale.finalized',
+        entityType: 'sale',
+        entityId: saleId,
+        occurredAt: now,
+        metadata: {'reference': invoiceNumber, 'paymentMethod': paymentMethod, 'totalMinor': totals.totalMinor},
+      );
     });
 
     final receipt = StringBuffer()

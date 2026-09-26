@@ -71,7 +71,15 @@ void main() {
 
     final ledger = await database.supplierLedgerEntries(supplier.id);
     expect(ledger.length, 3);
-    expect(await database.pendingOutboxCount(), 4);
+    final outbox = await database.listOutboxItems();
+    expect(
+      outbox.where((item) => item.entityType != 'audit_event').length,
+      4,
+    );
+    expect(
+      outbox.where((item) => item.entityType == 'audit_event').length,
+      1,
+    );
   });
 
   test('supplier payment cannot exceed payable balance', () async {
