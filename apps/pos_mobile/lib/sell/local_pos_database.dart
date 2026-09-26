@@ -1536,6 +1536,19 @@ class LocalPosDatabase {
     });
   }
 
+  Future<bool> canReadAudit(LocalSaleContext context) async {
+    final rows = await _database.query(
+      'employee',
+      columns: ['role'],
+      where: 'id = ? AND active = 1',
+      whereArgs: [context.userId],
+      limit: 1,
+    );
+    if (rows.isEmpty) return false;
+    final role = rows.single['role']! as String;
+    return role == 'owner' || role == 'manager';
+  }
+
   Future<List<LocalAuditEvent>> listAuditEvents({int limit = 200}) async {
     if (limit <= 0 || limit > 1000) {
       throw ArgumentError('Audit limit must be between 1 and 1000');
