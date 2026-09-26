@@ -34,7 +34,15 @@ void main() {
     expect(first.totalMinor, 42700);
     expect(first.changeMinor, 7300);
     expect(first.receiptText, contains('Milk'));
-    expect(await database.pendingOutboxCount(), 1);
+    var outbox = await database.listOutboxItems();
+    expect(
+      outbox.where((item) => item.entityType == 'sale').length,
+      1,
+    );
+    expect(
+      outbox.where((item) => item.entityType == 'audit_event').length,
+      1,
+    );
     expect(await database.paymentEventCountForSale(first.saleId), 1);
 
     final second = await database.finalizeCashSale(
@@ -44,6 +52,14 @@ void main() {
     );
 
     expect(second.invoiceNumber, 'T01-000002');
-    expect(await database.pendingOutboxCount(), 2);
+    outbox = await database.listOutboxItems();
+    expect(
+      outbox.where((item) => item.entityType == 'sale').length,
+      2,
+    );
+    expect(
+      outbox.where((item) => item.entityType == 'audit_event').length,
+      2,
+    );
   });
 }
