@@ -247,6 +247,7 @@ class _ReturnsScreenState extends State<ReturnsScreen> {
         SnackBar(content: Text(message)),
       );
     }
+  }
 
   @override
   Widget build(BuildContext context) {
