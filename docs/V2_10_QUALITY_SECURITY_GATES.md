@@ -52,11 +52,17 @@ Repository source/database files are scanned for common high-risk committed-secr
 
 The policy is intentionally narrow to reduce false positives. It is not a substitute for organization-wide secret scanning.
 
-## Pull-request dependency review
+## Dependency vulnerability gate
 
-Pull requests now run GitHub dependency review and fail on newly introduced **high or critical** vulnerable dependencies.
+The API CI resolves the current dependency graph and then runs:
 
-This is a change-review control. It does not replace package-manager lockfiles, runtime SBOMs or production image scanning.
+`npm audit --audit-level=high`
+
+High/critical npm vulnerabilities fail the pull request.
+
+GitHub's Dependency Review action was evaluated but the repository Dependency Graph is currently disabled, so V2.10 does not depend on that external repository setting.
+
+This audit is still not fully reproducible until an API lockfile is committed.
 
 ## Dependabot
 
