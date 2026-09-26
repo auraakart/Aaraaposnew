@@ -8,7 +8,6 @@ on:
 
 permissions:
   contents: read
-  pull-requests: read
 
 jobs:
   api:
@@ -24,6 +23,7 @@ jobs:
           node-version: 22
           package-manager-cache: false
       - run: npm install --no-audit --no-fund
+      - run: npm audit --audit-level=high
       - run: npm run policy
       - run: npm run typecheck
       - run: npm test
@@ -52,13 +52,3 @@ jobs:
       - run: test -f docs/V0_BASELINE.md
       - run: test -f services/api/db/migrations/0001_foundation.sql
 
-
-  dependency-review:
-    name: Dependency security gate
-    if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-      - uses: actions/dependency-review-action@v4
-        with:
-          fail-on-severity: high
