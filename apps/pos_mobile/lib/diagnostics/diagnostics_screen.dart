@@ -165,11 +165,11 @@ class _DiagnosticsScreenState extends State<DiagnosticsScreen> {
             ],
           ),
           const SizedBox(height: 12),
-          Card(
+          const Card(
             child: ListTile(
-              leading: const Icon(Icons.info_outline),
-              title: const Text('Repository-only diagnostics'),
-              subtitle: const Text(
+              leading: Icon(Icons.info_outline),
+              title: Text('Repository-only diagnostics'),
+              subtitle: Text(
                 'Server connectivity, cloud database, payment providers, '
                 'messaging providers and physical hardware are not tested '
                 'from this local screen.',
