@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../accounting/accounting_export_screen.dart';
 import '../audit/audit_history_screen.dart';
 import '../commerce/commerce_orders_screen.dart';
+import '../diagnostics/diagnostics_screen.dart';
 import '../hardware/hardware_status_screen.dart';
 import '../l10n/app_strings.dart';
 import '../l10n/language_accessibility_screen.dart';
@@ -29,6 +30,29 @@ class MoreScreen extends StatelessWidget {
     return ListView(
       padding: const EdgeInsets.all(16),
       children: [
+        Card(
+          child: ListTile(
+            leading: const Icon(Icons.monitor_heart_outlined),
+            title: const Text('Diagnostics'),
+            subtitle: const Text(
+              'Local database integrity, sync status and safe technical counts',
+            ),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () {
+              Navigator.of(context).push(
+                MaterialPageRoute<void>(
+                  builder: (_) => Scaffold(
+                    appBar: AppBar(title: const Text('Diagnostics')),
+                    body: DiagnosticsScreen(
+                      database: database,
+                      saleContext: saleContext,
+                    ),
+                  ),
+                ),
+              );
+            },
+          ),
+        ),
         Card(
           child: ListTile(
             leading: const Icon(Icons.history_outlined),

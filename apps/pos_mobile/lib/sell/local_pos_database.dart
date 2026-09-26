@@ -9,6 +9,7 @@ import '../audit/audit_domain.dart';
 import '../ai/ai_domain.dart';
 import '../commerce/commerce_domain.dart';
 import '../customers/customer_domain.dart';
+import '../diagnostics/diagnostics_domain.dart';
 import '../intelligence/owner_intelligence.dart';
 import '../inventory/inventory_domain.dart';
 import '../loyalty/loyalty_domain.dart';
@@ -5113,6 +5114,66 @@ class LocalPosDatabase {
       },
       where: 'id = ?',
       whereArgs: [id],
+    );
+  }
+
+  Future<bool> canReadDiagnostics(LocalSaleContext context) async {
+    return canReadAudit(context);
+  }
+
+  Future<LocalDiagnosticsSnapshot> diagnosticsSnapshot({
+    DateTime? now,
+  }) async {
+    final generatedAt = (now ?? DateTime.now()).toUtc();
+
+    final integrityRows = await _database.rawQuery('PRAGMA quick_check');
+    final integrityValue = integrityRows.isEmpty
+        ? null
+        : integrityRows.single.values.first?.toString().toLowerCase();
+
+    final foreignKeyRows = await _database.rawQuery('PRAGMA foreign_keys');
+    final foreignKeysEnabled = foreignKeyRows.isNotEmpty &&
+        foreignKeyRows.single.values.first == 1;
+
+    final versionRows = await _database.rawQuery('PRAGMA user_version');
+    final schemaVersion = versionRows.isEmpty
+        ? 0
+        : (versionRows.single.values.first as int?) ?? 0;
+
+    final productRows = await _database.rawQuery(
+      'SELECT COUNT(*) AS count FROM product WHERE active = 1',
+    );
+    final saleRows = await _database.rawQuery(
+      "SELECT COUNT(*) AS count FROM sale WHERE status = 'finalized'",
+    );
+    final auditRows = await _database.rawQuery(
+      'SELECT COUNT(*) AS count FROM local_audit_event',
+    );
+    final shiftRows = await _database.rawQuery(
+      "SELECT COUNT(*) AS count FROM shift WHERE status = 'open'",
+    );
+    final oldestRows = await _database.rawQuery(
+      '''
+      SELECT MIN(created_at) AS oldest
+      FROM sync_outbox
+      WHERE state IN ('pending', 'sending', 'conflict', 'rejected')
+      ''',
+    );
+    final oldestValue =
+        oldestRows.isEmpty ? null : oldestRows.single['oldest'] as String?;
+
+    return LocalDiagnosticsSnapshot(
+      generatedAt: generatedAt,
+      databaseIntegrityOk: integrityValue == 'ok',
+      foreignKeysEnabled: foreignKeysEnabled,
+      schemaVersion: schemaVersion,
+      outboxCounts: await outboxStateCounts(),
+      productCount: (productRows.single['count'] as int?) ?? 0,
+      finalizedSaleCount: (saleRows.single['count'] as int?) ?? 0,
+      auditEventCount: (auditRows.single['count'] as int?) ?? 0,
+      openShiftCount: (shiftRows.single['count'] as int?) ?? 0,
+      oldestUnresolvedAt:
+          oldestValue == null ? null : DateTime.tryParse(oldestValue),
     );
   }
 
