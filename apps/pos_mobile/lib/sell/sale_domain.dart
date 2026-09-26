@@ -88,6 +88,33 @@ class PricedSaleLine {
   final String? discountReferenceId;
 }
 
+class SaleTaxSnapshot {
+  const SaleTaxSnapshot({
+    required this.saleLineId,
+    required this.productId,
+    required this.rateBps,
+    required this.priceMode,
+    this.classificationType,
+    this.classificationCode,
+    this.taxRuleVersionId,
+  });
+
+  final String saleLineId;
+  final String productId;
+  final int? rateBps;
+  final TaxPriceMode? priceMode;
+  final TaxClassificationType? classificationType;
+  final String? classificationCode;
+  final String? taxRuleVersionId;
+
+  bool get fullyTraceable =>
+      rateBps != null &&
+      priceMode != null &&
+      classificationType != null &&
+      classificationCode != null &&
+      taxRuleVersionId != null;
+}
+
 class SaleTotals {
   const SaleTotals({
     required this.lines,
