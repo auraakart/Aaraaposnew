@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../customers/customer_domain.dart';
+import '../l10n/app_strings.dart';
 import '../loyalty/loyalty_domain.dart';
 import '../payments/payment_domain.dart';
 import '../payments/payment_method_sheet.dart';
@@ -941,6 +942,7 @@ class _SellScreenState extends State<SellScreen> {
   @override
   Widget build(BuildContext context) {
     final saleTotals = totals;
+    final strings = AppStrings.of(context);
 
     return Column(
       children: [
@@ -951,7 +953,7 @@ class _SellScreenState extends State<SellScreen> {
               Expanded(
                 child: SearchBar(
                   controller: searchController,
-                  hintText: 'Search name or scan barcode',
+                  hintText: strings.searchOrScan,
                   leading: const Icon(Icons.search),
                   onSubmitted: refreshProducts,
                   onChanged: (value) {
@@ -963,13 +965,13 @@ class _SellScreenState extends State<SellScreen> {
               ),
               const SizedBox(width: 8),
               IconButton.filledTonal(
-                tooltip: 'Scan barcode',
+                tooltip: strings.scanBarcode,
                 onPressed: scanBarcode,
                 icon: const Icon(Icons.qr_code_scanner),
               ),
               const SizedBox(width: 8),
               IconButton.filledTonal(
-                tooltip: 'Add product',
+                tooltip: strings.addProduct,
                 onPressed: showAddProduct,
                 icon: const Icon(Icons.add),
               ),
@@ -987,26 +989,26 @@ class _SellScreenState extends State<SellScreen> {
                 icon: const Icon(Icons.person_outline),
                 label: Text(
                   selectedCustomer == null
-                      ? 'Guest customer'
+                      ? strings.guestCustomer
                       : selectedCustomer!.name,
                 ),
               ),
               OutlinedButton.icon(
                 onPressed: totals == null ? null : holdCurrentSale,
                 icon: const Icon(Icons.pause_circle_outline),
-                label: const Text('Hold'),
+                label: Text(strings.hold),
               ),
               OutlinedButton.icon(
                 onPressed: resumeHeldSale,
                 icon: const Icon(Icons.play_circle_outline),
-                label: const Text('Resume'),
+                label: Text(strings.resume),
               ),
               OutlinedButton.icon(
                 onPressed: totals == null ? null : applyBestOffer,
                 icon: const Icon(Icons.local_offer_outlined),
                 label: Text(
                   appliedPromotionName == null
-                      ? 'Apply offer'
+                      ? strings.applyOffer
                       : appliedPromotionName!,
                 ),
               ),
@@ -1016,7 +1018,7 @@ class _SellScreenState extends State<SellScreen> {
                 label: Text(
                   selectedCustomer?.loyaltyPoints == null ||
                           selectedCustomer!.loyaltyPoints == 0
-                      ? 'Use points'
+                      ? strings.usePoints
                       : '${selectedCustomer!.loyaltyPoints} points',
                 ),
               ),
@@ -1147,8 +1149,8 @@ class _SellScreenState extends State<SellScreen> {
               ),
               child: Text(
                 saleTotals == null
-                    ? 'Add items to bill'
-                    : 'Pay ${formatInr(saleTotals.totalMinor)}',
+                    ? strings.addItemsToBill
+                    : '${strings.pay} ${formatInr(saleTotals.totalMinor)}',
               ),
             ),
           ),

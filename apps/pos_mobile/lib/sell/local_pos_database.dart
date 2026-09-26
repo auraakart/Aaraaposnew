@@ -28,6 +28,7 @@ class LocalSaleContext {
     required this.storeName,
     required this.terminalCode,
     required this.taxMode,
+    this.preferredLocaleCode,
   });
 
   final String organizationId;
@@ -39,6 +40,7 @@ class LocalSaleContext {
   final String storeName;
   final String terminalCode;
   final TaxMode taxMode;
+  final String? preferredLocaleCode;
 }
 
 class OfflineSaleResult {
@@ -93,7 +95,7 @@ class LocalPosDatabase {
     _db = await _factory.openDatabase(
       path,
       options: OpenDatabaseOptions(
-        version: 10,
+        version: 11,
         onConfigure: (db) async {
           await db.execute('PRAGMA foreign_keys = ON');
         },
@@ -109,7 +111,8 @@ class LocalPosDatabase {
               business_name TEXT NOT NULL,
               store_name TEXT NOT NULL,
               terminal_code TEXT NOT NULL,
-              tax_mode TEXT NOT NULL
+              tax_mode TEXT NOT NULL,
+              preferred_locale_code TEXT
             )
           ''');
           await db.execute('''
@@ -984,6 +987,11 @@ class LocalPosDatabase {
               )
             ''');
           }
+          if (oldVersion < 11) {
+            await db.execute(
+              "ALTER TABLE local_context ADD COLUMN preferred_locale_code TEXT",
+            );
+          }
         },
       ),
     );
@@ -1016,6 +1024,7 @@ class LocalPosDatabase {
       taxMode: row['tax_mode'] == 'inter_state'
           ? TaxMode.interState
           : TaxMode.intraState,
+      preferredLocaleCode: row['preferred_locale_code'] as String?,
     );
   }
 
@@ -1080,6 +1089,23 @@ class LocalPosDatabase {
     });
 
     return context;
+  }
+
+  Future<void> updatePreferredLocaleCode(String? localeCode) async {
+    final normalized = localeCode?.trim().toLowerCase();
+    if (normalized != null &&
+        normalized.isNotEmpty &&
+        !{'en', 'hi', 'ta'}.contains(normalized)) {
+      throw ArgumentError('Unsupported locale code');
+    }
+    await _database.update(
+      'local_context',
+      {
+        'preferred_locale_code':
+            normalized == null || normalized.isEmpty ? null : normalized,
+      },
+      where: 'singleton_id = 1',
+    );
   }
 
   Future<List<Product>> listProducts({String query = ''}) async {
