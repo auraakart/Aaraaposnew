@@ -1,5 +1,13 @@
 # Release Notes
 
+## V2.9 Audit & Governance Foundation — validation
+
+Added append-oriented local audit evidence for critical committed actions, atomic audit/outbox recording, Owner/Manager-only Audit History, server audit validation and sensitive-metadata rejection, terminal/outcome evidence, and regression tests.
+
+Audit remains source-linked evidence; financial and stock ledgers remain authoritative.
+
+# Release Notes
+
 ## V2.8 Localization & Accessibility Foundation — validation
 
 Added English/Hindi/Tamil localization infrastructure, persisted offline language preference, localized core navigation and primary Sell actions, a Language & Accessibility screen, device text-scale preservation, planned-language boundaries, and localization/persistence/widget regression tests.
@@ -120,6 +128,7 @@ Not claimed:
 - tax filing gateways or regulatory certification
 - physical hardware certification
 - production credentials, hosting or deployment
+
 
 
 
