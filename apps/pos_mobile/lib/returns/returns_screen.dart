@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../operations/operations_domain.dart';
 import '../sell/local_pos_database.dart';
 import '../sell/return_domain.dart';
 import '../sell/sale_domain.dart';
@@ -167,12 +168,15 @@ class _ReturnsScreenState extends State<ReturnsScreen> {
       return;
     }
 
+    final reasonText = reason.text.trim();
+    final selectedForApproval = selectedLine!;
+
     try {
       final result = await widget.database.processReturn(
         context: widget.saleContext,
         saleId: sale.saleId,
         requests: [request],
-        reason: reason.text,
+        reason: reasonText,
       );
       quantity.dispose();
       reason.dispose();
@@ -197,19 +201,52 @@ class _ReturnsScreenState extends State<ReturnsScreen> {
         ),
       );
     } on Object catch (error) {
+      final requiresApproval = error.toString().contains('Manager approval');
+      var message = 'Return could not be saved. Check the bill and try again.';
+
+      if (requiresApproval) {
+        final expectedRefund = prorateReturnMinor(
+          originalMinor: selectedForApproval.totalMinor,
+          partQuantityMilli: request.quantityMilli,
+          originalQuantityMilli: selectedForApproval.soldQuantityMilli,
+        );
+        final fingerprint = buildApprovalFingerprint(
+          actionType: 'refund',
+          entityId: sale.saleId,
+          facts: [
+            '${request.saleLineId}:${request.quantityMilli}',
+            'amount:$expectedRefund',
+          ],
+        );
+        try {
+          await widget.database.requestApproval(
+            context: widget.saleContext,
+            actionType: 'refund',
+            entityType: 'sale',
+            entityId: sale.saleId,
+            actionFingerprint: fingerprint,
+            requestedAmountMinor: expectedRefund,
+            reason:
+                'Refund ${formatInr(expectedRefund)} • ${sale.invoiceNumber} • $reasonText',
+          );
+          message =
+              'Approval request sent. Retry this refund after the Owner or Manager approves it.';
+        } on Object {
+          message =
+              'Approval is required, but the request could not be saved. Try again.';
+        }
+      } else if (error.toString().contains('Provider refund')) {
+        message =
+            'This payment provider is not configured for refunds yet.';
+      }
+
       quantity.dispose();
       reason.dispose();
       if (!mounted) return;
-      final message = error.toString().contains('Manager approval')
-          ? 'Manager approval is required for this refund.'
-          : error.toString().contains('Provider refund')
-              ? 'This payment provider is not configured for refunds yet.'
-              : 'Return could not be saved. Check the bill and try again.';
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text(message)),
       );
     }
-  }
 
   @override
   Widget build(BuildContext context) {
