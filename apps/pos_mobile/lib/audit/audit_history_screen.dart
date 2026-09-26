@@ -6,10 +6,12 @@ import 'audit_domain.dart';
 class AuditHistoryScreen extends StatefulWidget {
   const AuditHistoryScreen({
     required this.database,
+    required this.saleContext,
     super.key,
   });
 
   final LocalPosDatabase database;
+  final LocalSaleContext saleContext;
 
   @override
   State<AuditHistoryScreen> createState() => _AuditHistoryScreenState();
@@ -18,6 +20,7 @@ class AuditHistoryScreen extends StatefulWidget {
 class _AuditHistoryScreenState extends State<AuditHistoryScreen> {
   List<LocalAuditEvent> events = const [];
   bool loading = true;
+  bool authorized = true;
 
   @override
   void initState() {
@@ -26,9 +29,13 @@ class _AuditHistoryScreenState extends State<AuditHistoryScreen> {
   }
 
   Future<void> refresh() async {
-    final next = await widget.database.listAuditEvents(limit: 200);
+    final canRead = await widget.database.canReadAudit(widget.saleContext);
+    final next = canRead
+        ? await widget.database.listAuditEvents(limit: 200)
+        : const <LocalAuditEvent>[];
     if (!mounted) return;
     setState(() {
+      authorized = canRead;
       events = next;
       loading = false;
     });
@@ -56,6 +63,16 @@ class _AuditHistoryScreenState extends State<AuditHistoryScreen> {
             const Padding(
               padding: EdgeInsets.all(32),
               child: Center(child: CircularProgressIndicator()),
+            )
+          else if (!authorized)
+            const Card(
+              child: ListTile(
+                leading: Icon(Icons.lock_outline),
+                title: Text('Audit history is restricted'),
+                subtitle: Text(
+                  'Only Owner and Manager roles can read the local audit history.',
+                ),
+              ),
             )
           else if (events.isEmpty)
             const Card(
