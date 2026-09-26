@@ -3470,6 +3470,13 @@ class LocalPosDatabase {
         throw StateError('You cannot resolve your own approval request');
       }
 
+      final expiresAt = approval['expires_at'] as String?;
+      if (approve &&
+          expiresAt != null &&
+          !now.isBefore(DateTime.parse(expiresAt).toUtc())) {
+        throw StateError('Approval request has expired');
+      }
+
       final status = approve ? 'approved' : 'rejected';
       await txn.update(
         'approval_request',
