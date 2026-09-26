@@ -97,7 +97,7 @@ class LocalPosDatabase {
     _db = await _factory.openDatabase(
       path,
       options: OpenDatabaseOptions(
-        version: 12,
+        version: 13,
         onConfigure: (db) async {
           await db.execute('PRAGMA foreign_keys = ON');
         },
@@ -125,6 +125,9 @@ class LocalPosDatabase {
               unit_price_minor INTEGER NOT NULL CHECK (unit_price_minor >= 0),
               tax_rate_bps INTEGER NOT NULL CHECK (tax_rate_bps BETWEEN 0 AND 10000),
               tax_price_mode TEXT NOT NULL,
+              tax_classification_type TEXT,
+              tax_classification_code TEXT,
+              tax_rule_version_id TEXT,
               reorder_level_milli INTEGER NOT NULL DEFAULT 0,
               active INTEGER NOT NULL DEFAULT 1,
               UNIQUE (barcode)
@@ -182,7 +185,12 @@ class LocalPosDatabase {
               sgst_minor INTEGER NOT NULL,
               igst_minor INTEGER NOT NULL,
               tax_minor INTEGER NOT NULL,
-              total_minor INTEGER NOT NULL
+              total_minor INTEGER NOT NULL,
+              tax_rate_bps_snapshot INTEGER,
+              tax_price_mode_snapshot TEXT,
+              tax_classification_type_snapshot TEXT,
+              tax_classification_code_snapshot TEXT,
+              tax_rule_version_id_snapshot TEXT
             )
           ''');
           await db.execute('''
@@ -391,7 +399,10 @@ class LocalPosDatabase {
               discount_source TEXT,
               discount_reference_id TEXT,
               tax_rate_bps INTEGER NOT NULL,
-              tax_price_mode TEXT NOT NULL
+              tax_price_mode TEXT NOT NULL,
+              tax_classification_type TEXT,
+              tax_classification_code TEXT,
+              tax_rule_version_id TEXT
             )
           ''');
           await db.execute('''
@@ -1028,6 +1039,41 @@ class LocalPosDatabase {
               ON local_audit_event (occurred_at DESC)
             ''');
           }
+          if (oldVersion < 13) {
+            await db.execute(
+              'ALTER TABLE product ADD COLUMN tax_classification_type TEXT',
+            );
+            await db.execute(
+              'ALTER TABLE product ADD COLUMN tax_classification_code TEXT',
+            );
+            await db.execute(
+              'ALTER TABLE product ADD COLUMN tax_rule_version_id TEXT',
+            );
+            await db.execute(
+              'ALTER TABLE sale_line ADD COLUMN tax_rate_bps_snapshot INTEGER',
+            );
+            await db.execute(
+              'ALTER TABLE sale_line ADD COLUMN tax_price_mode_snapshot TEXT',
+            );
+            await db.execute(
+              'ALTER TABLE sale_line ADD COLUMN tax_classification_type_snapshot TEXT',
+            );
+            await db.execute(
+              'ALTER TABLE sale_line ADD COLUMN tax_classification_code_snapshot TEXT',
+            );
+            await db.execute(
+              'ALTER TABLE sale_line ADD COLUMN tax_rule_version_id_snapshot TEXT',
+            );
+            await db.execute(
+              'ALTER TABLE held_sale_line ADD COLUMN tax_classification_type TEXT',
+            );
+            await db.execute(
+              'ALTER TABLE held_sale_line ADD COLUMN tax_classification_code TEXT',
+            );
+            await db.execute(
+              'ALTER TABLE held_sale_line ADD COLUMN tax_rule_version_id TEXT',
+            );
+          }
         },
       ),
     );
@@ -1170,6 +1216,11 @@ class LocalPosDatabase {
             taxPriceMode: row['tax_price_mode'] == 'exclusive'
                 ? TaxPriceMode.exclusive
                 : TaxPriceMode.inclusive,
+            taxClassificationType: taxClassificationTypeFromValue(
+              row['tax_classification_type'] as String?,
+            ),
+            taxClassificationCode: row['tax_classification_code'] as String?,
+            taxRuleVersionId: row['tax_rule_version_id'] as String?,
           ),
         )
         .toList();
@@ -1181,16 +1232,32 @@ class LocalPosDatabase {
     String? barcode,
     int taxRateBps = 0,
     TaxPriceMode taxPriceMode = TaxPriceMode.inclusive,
+    TaxClassificationType? taxClassificationType,
+    String? taxClassificationCode,
+    String? taxRuleVersionId,
     int reorderLevelMilli = 0,
   }) async {
     final trimmed = name.trim();
+    final normalizedClassification = taxClassificationCode?.trim();
+    final normalizedRuleVersion = taxRuleVersionId?.trim();
+    final hasClassificationType = taxClassificationType != null;
+    final hasClassificationCode =
+        normalizedClassification != null && normalizedClassification.isNotEmpty;
+    final validClassificationCode = !hasClassificationCode ||
+        RegExp(r'^[A-Za-z0-9.-]{2,32}$').hasMatch(
+          normalizedClassification,
+        );
+
     if (trimmed.isEmpty ||
         unitPriceMinor < 0 ||
         taxRateBps < 0 ||
         taxRateBps > 10000 ||
-        reorderLevelMilli < 0) {
+        reorderLevelMilli < 0 ||
+        hasClassificationType != hasClassificationCode ||
+        !validClassificationCode) {
       throw ArgumentError('Invalid product');
     }
+
     final product = Product(
       id: _uuid.v4(),
       name: trimmed,
@@ -1198,6 +1265,11 @@ class LocalPosDatabase {
       unitPriceMinor: unitPriceMinor,
       taxRateBps: taxRateBps,
       taxPriceMode: taxPriceMode,
+      taxClassificationType: taxClassificationType,
+      taxClassificationCode:
+          hasClassificationCode ? normalizedClassification : null,
+      taxRuleVersionId:
+          normalizedRuleVersion?.isEmpty ?? true ? null : normalizedRuleVersion,
     );
     await _database.insert('product', {
       'id': product.id,
@@ -1208,6 +1280,11 @@ class LocalPosDatabase {
       'tax_price_mode': product.taxPriceMode == TaxPriceMode.exclusive
           ? 'exclusive'
           : 'inclusive',
+      'tax_classification_type': product.taxClassificationType == null
+          ? null
+          : taxClassificationTypeValue(product.taxClassificationType!),
+      'tax_classification_code': product.taxClassificationCode,
+      'tax_rule_version_id': product.taxRuleVersionId,
       'reorder_level_milli': reorderLevelMilli,
       'active': 1,
     });
@@ -1345,6 +1422,12 @@ class LocalPosDatabase {
                 taxPriceMode: row['tax_price_mode'] == 'exclusive'
                     ? TaxPriceMode.exclusive
                     : TaxPriceMode.inclusive,
+                taxClassificationType: taxClassificationTypeFromValue(
+                  row['tax_classification_type'] as String?,
+                ),
+                taxClassificationCode:
+                    row['tax_classification_code'] as String?,
+                taxRuleVersionId: row['tax_rule_version_id'] as String?,
               ),
               quantityMilli: row['quantity_milli']! as int,
               quotedUnitPriceMinor:
@@ -4399,6 +4482,13 @@ class LocalPosDatabase {
           'tax_price_mode': line.product.taxPriceMode == TaxPriceMode.exclusive
               ? 'exclusive'
               : 'inclusive',
+          'tax_classification_type': line.product.taxClassificationType == null
+              ? null
+              : taxClassificationTypeValue(
+                  line.product.taxClassificationType!,
+                ),
+          'tax_classification_code': line.product.taxClassificationCode,
+          'tax_rule_version_id': line.product.taxRuleVersionId,
         });
       }
     });
@@ -4449,6 +4539,12 @@ class LocalPosDatabase {
                 taxPriceMode: row['tax_price_mode'] == 'exclusive'
                     ? TaxPriceMode.exclusive
                     : TaxPriceMode.inclusive,
+                taxClassificationType: taxClassificationTypeFromValue(
+                  row['tax_classification_type'] as String?,
+                ),
+                taxClassificationCode:
+                    row['tax_classification_code'] as String?,
+                taxRuleVersionId: row['tax_rule_version_id'] as String?,
               ),
               quantityMilli: row['quantity_milli']! as int,
               discountMinor: row['discount_minor']! as int,
@@ -5202,6 +5298,50 @@ class LocalPosDatabase {
     return (rows.single['count'] as int?) ?? 0;
   }
 
+  Future<List<SaleTaxSnapshot>> saleTaxSnapshots(String saleId) async {
+    final normalized = saleId.trim();
+    if (normalized.isEmpty) {
+      throw ArgumentError('saleId is required');
+    }
+
+    final rows = await _database.query(
+      'sale_line',
+      columns: [
+        'id',
+        'product_id',
+        'tax_rate_bps_snapshot',
+        'tax_price_mode_snapshot',
+        'tax_classification_type_snapshot',
+        'tax_classification_code_snapshot',
+        'tax_rule_version_id_snapshot',
+      ],
+      where: 'sale_id = ?',
+      whereArgs: [normalized],
+      orderBy: 'id',
+    );
+
+    return rows
+        .map(
+          (row) => SaleTaxSnapshot(
+            saleLineId: row['id']! as String,
+            productId: row['product_id']! as String,
+            rateBps: row['tax_rate_bps_snapshot'] as int?,
+            priceMode: switch (row['tax_price_mode_snapshot']) {
+              'inclusive' => TaxPriceMode.inclusive,
+              'exclusive' => TaxPriceMode.exclusive,
+              _ => null,
+            },
+            classificationType: taxClassificationTypeFromValue(
+              row['tax_classification_type_snapshot'] as String?,
+            ),
+            classificationCode:
+                row['tax_classification_code_snapshot'] as String?,
+            taxRuleVersionId: row['tax_rule_version_id_snapshot'] as String?,
+          ),
+        )
+        .toList();
+  }
+
   Future<int> paymentEventCountForSale(String saleId) async {
     final rows = await _database.rawQuery(
       '''
@@ -5542,6 +5682,20 @@ class LocalPosDatabase {
           'igst_minor': line.igstMinor,
           'tax_minor': line.taxMinor,
           'total_minor': line.totalMinor,
+          'tax_rate_bps_snapshot': line.product.taxRateBps,
+          'tax_price_mode_snapshot':
+              line.product.taxPriceMode == TaxPriceMode.exclusive
+                  ? 'exclusive'
+                  : 'inclusive',
+          'tax_classification_type_snapshot':
+              line.product.taxClassificationType == null
+                  ? null
+                  : taxClassificationTypeValue(
+                      line.product.taxClassificationType!,
+                    ),
+          'tax_classification_code_snapshot':
+              line.product.taxClassificationCode,
+          'tax_rule_version_id_snapshot': line.product.taxRuleVersionId,
         });
         await txn.insert('stock_movement', {
           'id': _uuid.v4(),

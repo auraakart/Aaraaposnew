@@ -1,5 +1,13 @@
 # Release Notes
 
+## V2.13 Tax Governance Foundation — validation
+
+Added versioned/effective-dated tax-rule contracts, tenant-safe tax-rule persistence, HSN/SAC/other classification references, immutable sale-line tax snapshots, hold/resume preservation, and tax-evidence regression tests.
+
+Tax rates remain configurable rather than hard-coded. Current Indian tax requirements, filing integrations and classification correctness remain external validation/integration boundaries.
+
+# Release Notes
+
 ## V2.12 Data Resilience & Recovery Foundation — validation
 
 Added encrypted recovery-checkpoint contracts, SHA-256 content verification, tenant/store/schema/RPO safety assessment, recovery checkpoint/rehearsal persistence, and an Owner/Manager-only non-destructive local recovery-readiness view.
@@ -152,6 +160,7 @@ Not claimed:
 - tax filing gateways or regulatory certification
 - physical hardware certification
 - production credentials, hosting or deployment
+
 
 
 

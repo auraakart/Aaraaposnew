@@ -2,6 +2,22 @@ enum TaxMode { intraState, interState }
 
 enum TaxPriceMode { inclusive, exclusive }
 
+enum TaxClassificationType { hsn, sac, other }
+
+String taxClassificationTypeValue(TaxClassificationType value) => switch (value) {
+      TaxClassificationType.hsn => 'hsn',
+      TaxClassificationType.sac => 'sac',
+      TaxClassificationType.other => 'other',
+    };
+
+TaxClassificationType? taxClassificationTypeFromValue(String? value) =>
+    switch (value) {
+      'hsn' => TaxClassificationType.hsn,
+      'sac' => TaxClassificationType.sac,
+      'other' => TaxClassificationType.other,
+      _ => null,
+    };
+
 class Product {
   const Product({
     required this.id,
@@ -10,6 +26,9 @@ class Product {
     required this.taxRateBps,
     required this.taxPriceMode,
     this.barcode,
+    this.taxClassificationType,
+    this.taxClassificationCode,
+    this.taxRuleVersionId,
   });
 
   final String id;
@@ -18,6 +37,9 @@ class Product {
   final int unitPriceMinor;
   final int taxRateBps;
   final TaxPriceMode taxPriceMode;
+  final TaxClassificationType? taxClassificationType;
+  final String? taxClassificationCode;
+  final String? taxRuleVersionId;
 }
 
 class SaleLineInput {
@@ -64,6 +86,33 @@ class PricedSaleLine {
   final int totalMinor;
   final String? discountSource;
   final String? discountReferenceId;
+}
+
+class SaleTaxSnapshot {
+  const SaleTaxSnapshot({
+    required this.saleLineId,
+    required this.productId,
+    required this.rateBps,
+    required this.priceMode,
+    this.classificationType,
+    this.classificationCode,
+    this.taxRuleVersionId,
+  });
+
+  final String saleLineId;
+  final String productId;
+  final int? rateBps;
+  final TaxPriceMode? priceMode;
+  final TaxClassificationType? classificationType;
+  final String? classificationCode;
+  final String? taxRuleVersionId;
+
+  bool get fullyTraceable =>
+      rateBps != null &&
+      priceMode != null &&
+      classificationType != null &&
+      classificationCode != null &&
+      taxRuleVersionId != null;
 }
 
 class SaleTotals {
