@@ -1,5 +1,13 @@
 # Release Notes
 
+## V2.8 Localization & Accessibility Foundation — validation
+
+Added English/Hindi/Tamil localization infrastructure, persisted offline language preference, localized core navigation and primary Sell actions, a Language & Accessibility screen, device text-scale preservation, planned-language boundaries, and localization/persistence/widget regression tests.
+
+Additional Indian languages remain prepared but intentionally unsupported until translated and reviewed.
+
+# Release Notes
+
 ## V2.7 Hardware & Device Foundation — validation
 
 Added terminal-scoped hardware/device capability contracts, server device/profile command-audit schema, provenance rules for drawer/receipt actions, Flutter adapter contracts for drawer/scale/display/payment terminal, truthful readiness UI, and regression tests.
@@ -112,6 +120,7 @@ Not claimed:
 - tax filing gateways or regulatory certification
 - physical hardware certification
 - production credentials, hosting or deployment
+
 
 
 
