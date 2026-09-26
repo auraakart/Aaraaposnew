@@ -50,7 +50,7 @@ class LanguageAccessibilityScreen extends StatelessWidget {
                 _LanguageTile(
                   value: 'system',
                   selected: selected,
-                  title: 'System default',
+                  title: strings.systemDefault,
                   onChanged: (value) => _selectLocale(context, value),
                 ),
                 _LanguageTile(
@@ -80,10 +80,7 @@ class LanguageAccessibilityScreen extends StatelessWidget {
           child: ListTile(
             leading: const Icon(Icons.text_fields_outlined),
             title: Text(strings.followsTextSize),
-            subtitle: const Text(
-              'Text scaling is inherited from Android/iOS accessibility settings. '
-              'Primary actions keep large touch targets and visible labels.',
-            ),
+            subtitle: Text(strings.accessibilityDetail),
           ),
         ),
         const SizedBox(height: 12),
@@ -91,9 +88,7 @@ class LanguageAccessibilityScreen extends StatelessWidget {
           child: ExpansionTile(
             leading: const Icon(Icons.translate_outlined),
             title: Text(strings.translationPending),
-            subtitle: const Text(
-              'Prepared languages are not marked supported until translated and reviewed.',
-            ),
+            subtitle: Text(strings.preparedLanguagesDetail),
             childrenPadding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
             children: const [
               _PendingLanguage('తెలుగు', 'Telugu'),
