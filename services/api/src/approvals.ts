@@ -119,12 +119,14 @@ export function resolveApproval(input: {
     throw new Error("resolvedAt must be an ISO date-time");
   }
 
+  const resolvedReason = input.reason?.trim() || input.request.reason;
+
   return {
     ...input.request,
     status: input.decision === "approve" ? "approved" : "rejected",
     resolvedByUserId: input.resolverUserId,
     resolvedAt: input.resolvedAt,
-    reason: input.reason?.trim() || input.request.reason
+    ...(resolvedReason === undefined ? {} : { reason: resolvedReason })
   };
 }
 
