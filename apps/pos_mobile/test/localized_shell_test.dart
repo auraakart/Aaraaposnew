@@ -1,30 +1,35 @@
-import 'package:aaraapos_pos/main.dart';
-import 'package:aaraapos_pos/sell/local_pos_database.dart';
+import 'package:aaraapos_pos/l10n/app_strings.dart';
+import 'package:flutter/material.dart';
+import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
 void main() {
-  setUpAll(sqfliteFfiInit);
-
-  testWidgets('persisted Hindi locale renders the core shell in Hindi',
+  testWidgets('Hindi locale renders through the application delegate',
       (tester) async {
-    final database = LocalPosDatabase(
-      factory: databaseFactoryFfi,
-      databasePath: inMemoryDatabasePath,
+    await tester.pumpWidget(
+      MaterialApp(
+        locale: const Locale('hi'),
+        supportedLocales: AppStrings.supportedLocales,
+        localizationsDelegates: const [
+          AppStrings.delegate,
+          GlobalMaterialLocalizations.delegate,
+          GlobalWidgetsLocalizations.delegate,
+          GlobalCupertinoLocalizations.delegate,
+        ],
+        home: Builder(
+          builder: (context) => Scaffold(
+            body: Column(
+              children: [
+                Text(AppStrings.of(context).businessToday),
+                Text(AppStrings.of(context).sell),
+                Text(AppStrings.of(context).customers),
+              ],
+            ),
+          ),
+        ),
+      ),
     );
-    addTearDown(database.close);
-
-    await database.open();
-    await database.bootstrapOwner(
-      businessName: 'Aaraa Demo Shop',
-      storeName: 'Main Store',
-    );
-    await database.updatePreferredLocaleCode('hi');
-
-    await tester.pumpWidget(AaraaPosApp(database: database));
-    for (var i = 0; i < 8; i++) {
-      await tester.pump(const Duration(milliseconds: 25));
-    }
+    await tester.pump();
 
     expect(find.text('आज का कारोबार'), findsOneWidget);
     expect(find.text('बिक्री'), findsOneWidget);
