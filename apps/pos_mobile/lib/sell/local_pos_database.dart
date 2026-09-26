@@ -4539,6 +4539,12 @@ class LocalPosDatabase {
                 taxPriceMode: row['tax_price_mode'] == 'exclusive'
                     ? TaxPriceMode.exclusive
                     : TaxPriceMode.inclusive,
+                taxClassificationType: taxClassificationTypeFromValue(
+                  row['tax_classification_type'] as String?,
+                ),
+                taxClassificationCode:
+                    row['tax_classification_code'] as String?,
+                taxRuleVersionId: row['tax_rule_version_id'] as String?,
               ),
               quantityMilli: row['quantity_milli']! as int,
               discountMinor: row['discount_minor']! as int,
