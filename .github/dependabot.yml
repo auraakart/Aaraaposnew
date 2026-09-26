@@ -1,0 +1,29 @@
+version: 2
+updates:
+  - package-ecosystem: "npm"
+    directory: "/services/api"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "03:30"
+      timezone: "Asia/Kolkata"
+    open-pull-requests-limit: 3
+    groups:
+      api-minor-patch:
+        update-types:
+          - "minor"
+          - "patch"
+
+  - package-ecosystem: "pub"
+    directory: "/apps/pos_mobile"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "04:00"
+      timezone: "Asia/Kolkata"
+    open-pull-requests-limit: 3
+    groups:
+      flutter-minor-patch:
+        update-types:
+          - "minor"
+          - "patch"
