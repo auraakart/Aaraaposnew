@@ -6,8 +6,11 @@ import 'package:aaraapos_pos/sell/sale_domain.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
 void main() {
+  setUpAll(sqfliteFfiInit);
+
   const saleContext = LocalSaleContext(
     organizationId: 'org-1',
     businessId: 'business-1',
@@ -31,7 +34,10 @@ void main() {
       ],
       home: Scaffold(
         body: MoreScreen(
-          database: LocalPosDatabase(),
+          database: LocalPosDatabase(
+            factory: databaseFactoryFfi,
+            databasePath: inMemoryDatabasePath,
+          ),
           saleContext: saleContext,
           role: role,
         ),
