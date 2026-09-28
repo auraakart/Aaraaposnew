@@ -14,7 +14,14 @@ void main() {
       factory: databaseFactoryFfi,
       databasePath: inMemoryDatabasePath,
     );
-    addTearDown(database.close);
+    addTearDown(() async {
+      await tester.pumpWidget(const SizedBox.shrink());
+      await tester.pump();
+      await tester.runAsync(() async {
+        await Future<void>.delayed(const Duration(milliseconds: 75));
+        await database.close();
+      });
+    });
 
     await tester.runAsync(database.open);
     await tester.pumpWidget(AaraaPosApp(database: database));
