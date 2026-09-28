@@ -2984,7 +2984,7 @@ class LocalPosDatabase {
     final normalizedEmployeeId = employeeId.trim();
     final authenticatedAt = (now ?? DateTime.now()).toUtc();
 
-    return _database.transaction((txn) async {
+    final outcome = await _database.transaction<Object>((txn) async {
       final employees = await txn.query(
         'employee',
         where: 'id = ? AND active = 1',
@@ -2992,7 +2992,7 @@ class LocalPosDatabase {
         limit: 1,
       );
       if (employees.isEmpty) {
-        throw const LocalPinAuthException(code: 'EMPLOYEE_NOT_AVAILABLE');
+        return const LocalPinAuthException(code: 'EMPLOYEE_NOT_AVAILABLE');
       }
       final credentials = await txn.query(
         'employee_local_credential',
@@ -3001,7 +3001,7 @@ class LocalPosDatabase {
         limit: 1,
       );
       if (credentials.isEmpty) {
-        throw const LocalPinAuthException(code: 'PIN_NOT_CONFIGURED');
+        return const LocalPinAuthException(code: 'PIN_NOT_CONFIGURED');
       }
 
       final credential = credentials.single;
@@ -3010,7 +3010,7 @@ class LocalPosDatabase {
           ? null
           : DateTime.tryParse(lockedUntilRaw)?.toUtc();
       if (lockedUntil != null && authenticatedAt.isBefore(lockedUntil)) {
-        throw LocalPinAuthException(
+        return LocalPinAuthException(
           code: 'PIN_LOCKED',
           lockedUntil: lockedUntil,
         );
@@ -3039,7 +3039,7 @@ class LocalPosDatabase {
           where: 'employee_id = ?',
           whereArgs: [normalizedEmployeeId],
         );
-        throw LocalPinAuthException(
+        return LocalPinAuthException(
           code: nextLockedUntil == null ? 'PIN_INCORRECT' : 'PIN_LOCKED',
           lockedUntil: nextLockedUntil,
         );
@@ -3091,6 +3091,11 @@ class LocalPosDatabase {
         identity: identity,
       );
     });
+
+    if (outcome is LocalPinAuthException) {
+      throw outcome;
+    }
+    return outcome as LocalAuthenticatedSession;
   }
 
   Future<LocalAuthenticatedSession?> restoreLocalSession({
