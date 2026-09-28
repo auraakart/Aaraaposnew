@@ -106,6 +106,34 @@ async function dependencyPolicy() {
   }
 }
 
+async function reproducibilityPolicy() {
+  const requiredFiles = [
+    path.join(apiRoot, "package-lock.json"),
+    path.join(repoRoot, "apps", "pos_mobile", "pubspec.lock"),
+    path.join(repoRoot, "apps", "pos_mobile", ".metadata"),
+    path.join(repoRoot, "apps", "pos_mobile", "android", "settings.gradle.kts"),
+    path.join(repoRoot, "apps", "pos_mobile", "android", "app", "build.gradle.kts"),
+    path.join(
+      repoRoot,
+      "apps",
+      "pos_mobile",
+      "android",
+      "app",
+      "src",
+      "main",
+      "AndroidManifest.xml"
+    )
+  ];
+
+  for (const file of requiredFiles) {
+    if (!existsSync(file)) {
+      fail(
+        `Reproducibility artifact is missing: ${path.relative(repoRoot, file)}`
+      );
+    }
+  }
+}
+
 async function sourceSecretPolicy() {
   const roots = [
     path.join(apiRoot, "src"),
@@ -167,6 +195,7 @@ async function sourceSecretPolicy() {
 
 await migrationPolicy();
 await dependencyPolicy();
+await reproducibilityPolicy();
 await sourceSecretPolicy();
 
 if (failures.length > 0) {
@@ -178,5 +207,5 @@ if (failures.length > 0) {
 }
 
 console.log(
-  "Repository policy passed: migration ordering/safety, dependency sources and secret hygiene."
+  "Repository policy passed: migration ordering/safety, dependency sources, reproducibility artifacts and secret hygiene."
 );
