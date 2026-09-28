@@ -40,6 +40,9 @@ void main() {
       }
       throw StateError('Store bootstrap did not complete');
     });
+    await tester.runAsync(
+      () => Future<void>.delayed(const Duration(milliseconds: 100)),
+    );
     for (var attempt = 0;
         attempt < 20 && find.text('Create the Owner PIN').evaluate().isEmpty;
         attempt++) {
@@ -65,6 +68,9 @@ void main() {
       }
       throw StateError('Owner sign-in did not complete');
     });
+    await tester.runAsync(
+      () => Future<void>.delayed(const Duration(milliseconds: 100)),
+    );
     for (var attempt = 0;
         attempt < 20 && find.text('Home').evaluate().isEmpty;
         attempt++) {
