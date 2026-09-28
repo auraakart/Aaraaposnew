@@ -9,7 +9,7 @@ import 'intelligence/business_today_screen.dart';
 import 'inventory/stock_screen.dart';
 import 'l10n/app_strings.dart';
 import 'more/more_screen.dart';
-import 'operations/operations_domain.dart';
+import 'workspace/workspace_policy.dart';
 import 'sell/bootstrap_screen.dart';
 import 'sell/local_pos_database.dart';
 import 'sell/sell_screen.dart';
@@ -215,17 +215,14 @@ class MainShell extends StatefulWidget {
 }
 
 class _MainShellState extends State<MainShell> {
-  late int index;
+  late final List<WorkspaceDestination> workspaceDestinations;
+  var index = 0;
   Timer? sessionTimer;
 
   @override
   void initState() {
     super.initState();
-    index = switch (widget.session.role) {
-      EmployeeRole.cashier => 1,
-      EmployeeRole.stockWorker => 2,
-      _ => 0,
-    };
+    workspaceDestinations = workspaceDestinationsForRole(widget.session.role);
     scheduleExpiry();
   }
 
@@ -234,7 +231,9 @@ class _MainShellState extends State<MainShell> {
     final remaining =
         widget.session.expiresAt.difference(DateTime.now().toUtc());
     if (remaining <= Duration.zero) {
-      WidgetsBinding.instance.addPostFrameCallback((_) => widget.onLock());
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) widget.onLock();
+      });
       return;
     }
     sessionTimer = Timer(remaining, widget.onLock);
@@ -249,43 +248,11 @@ class _MainShellState extends State<MainShell> {
   @override
   Widget build(BuildContext context) {
     final strings = AppStrings.of(context);
-    final destinations = <NavigationDestination>[
-      NavigationDestination(
-        icon: const Icon(Icons.home_outlined),
-        selectedIcon: const Icon(Icons.home),
-        label: strings.home,
-      ),
-      NavigationDestination(
-        icon: const Icon(Icons.point_of_sale_outlined),
-        selectedIcon: const Icon(Icons.point_of_sale),
-        label: strings.sell,
-      ),
-      NavigationDestination(
-        icon: const Icon(Icons.inventory_2_outlined),
-        selectedIcon: const Icon(Icons.inventory_2),
-        label: strings.stock,
-      ),
-      NavigationDestination(
-        icon: const Icon(Icons.people_outline),
-        selectedIcon: const Icon(Icons.people),
-        label: strings.customers,
-      ),
-      NavigationDestination(
-        icon: const Icon(Icons.more_horiz),
-        label: strings.more,
-      ),
-    ];
-    final titles = <String>[
-      strings.businessToday,
-      strings.sell,
-      strings.stock,
-      strings.customers,
-      strings.more,
-    ];
+    final selected = workspaceDestinations[index];
 
     return Scaffold(
       appBar: AppBar(
-        title: Text(titles[index]),
+        title: Text(_workspaceTitle(selected, strings)),
         actions: [
           Center(
             child: Text(
@@ -301,33 +268,82 @@ class _MainShellState extends State<MainShell> {
           const SizedBox(width: 4),
         ],
       ),
-      body: index == 0
-          ? BusinessTodayScreen(database: widget.database)
-          : index == 1
-              ? SellScreen(
-                  database: widget.database,
-                  saleContext: widget.saleContext,
-                )
-              : index == 2
-                  ? StockScreen(
-                      database: widget.database,
-                      saleContext: widget.saleContext,
-                    )
-                  : index == 3
-                      ? CustomersScreen(
-                          database: widget.database,
-                          saleContext: widget.saleContext,
-                        )
-                      : MoreScreen(
-                          database: widget.database,
-                          saleContext: widget.saleContext,
-                          onSessionInvalidated: widget.onLock,
-                        ),
+      body: _workspaceBody(selected),
       bottomNavigationBar: NavigationBar(
         selectedIndex: index,
-        destinations: destinations,
+        destinations: [
+          for (final destination in workspaceDestinations)
+            _navigationDestination(destination, strings),
+        ],
         onDestinationSelected: (value) => setState(() => index = value),
       ),
     );
   }
+
+  NavigationDestination _navigationDestination(
+    WorkspaceDestination destination,
+    AppStrings strings,
+  ) =>
+      switch (destination) {
+        WorkspaceDestination.home => NavigationDestination(
+            icon: const Icon(Icons.home_outlined),
+            selectedIcon: const Icon(Icons.home),
+            label: strings.home,
+          ),
+        WorkspaceDestination.sell => NavigationDestination(
+            icon: const Icon(Icons.point_of_sale_outlined),
+            selectedIcon: const Icon(Icons.point_of_sale),
+            label: strings.sell,
+          ),
+        WorkspaceDestination.stock => NavigationDestination(
+            icon: const Icon(Icons.inventory_2_outlined),
+            selectedIcon: const Icon(Icons.inventory_2),
+            label: strings.stock,
+          ),
+        WorkspaceDestination.customers => NavigationDestination(
+            icon: const Icon(Icons.people_outline),
+            selectedIcon: const Icon(Icons.people),
+            label: strings.customers,
+          ),
+        WorkspaceDestination.more => NavigationDestination(
+            icon: const Icon(Icons.more_horiz),
+            label: strings.more,
+          ),
+      };
+
+  String _workspaceTitle(
+    WorkspaceDestination destination,
+    AppStrings strings,
+  ) =>
+      switch (destination) {
+        WorkspaceDestination.home => strings.businessToday,
+        WorkspaceDestination.sell => strings.sell,
+        WorkspaceDestination.stock => strings.stock,
+        WorkspaceDestination.customers => strings.customers,
+        WorkspaceDestination.more => strings.more,
+      };
+
+  Widget _workspaceBody(WorkspaceDestination destination) =>
+      switch (destination) {
+        WorkspaceDestination.home =>
+          BusinessTodayScreen(database: widget.database),
+        WorkspaceDestination.sell => SellScreen(
+            database: widget.database,
+            saleContext: widget.saleContext,
+          ),
+        WorkspaceDestination.stock => StockScreen(
+            database: widget.database,
+            saleContext: widget.saleContext,
+          ),
+        WorkspaceDestination.customers => CustomersScreen(
+            database: widget.database,
+            saleContext: widget.saleContext,
+          ),
+        WorkspaceDestination.more => MoreScreen(
+            database: widget.database,
+            saleContext: widget.saleContext,
+            role: widget.session.role,
+            onSessionInvalidated: widget.onLock,
+          ),
+      };
 }

@@ -1,5 +1,13 @@
 # Release Notes
 
+## V2.16 Role-Aware Workspace — validation
+
+Added least-privilege primary navigation and More-menu visibility driven by the authenticated employee role. Owner/Manager retain the full workspace, Cashier defaults to Sell with operational customer/checkout tools, and Stock Worker defaults to Stock with a minimal safe More menu.
+
+UI visibility is explicitly not the authorization boundary; existing database/server RBAC and approval governance remain authoritative.
+
+# Release Notes
+
 ## V2.15 Identity & Local Session Foundation — validation
 
 Added offline employee PIN sign-in, salted/iterated local PIN hashes, failed-attempt lockout, expiring/restorable terminal sessions, lock/switch-user UX, Owner/Manager employee PIN administration, role-aware landing screens, and an explicit server boundary that rejects local PINs as remote authentication credentials.
@@ -176,6 +184,7 @@ Not claimed:
 - tax filing gateways or regulatory certification
 - physical hardware certification
 - production credentials, hosting or deployment
+
 
 
 
