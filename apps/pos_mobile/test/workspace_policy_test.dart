@@ -17,7 +17,7 @@ void main() {
       );
       expect(
         moreFeaturesForRole(role),
-        MoreFeature.values.toSet(),
+        unorderedEquals(MoreFeature.values),
       );
     }
   });
