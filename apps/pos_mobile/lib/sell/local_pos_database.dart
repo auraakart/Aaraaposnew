@@ -5,6 +5,7 @@ import 'package:sqflite/sqflite.dart';
 import 'package:uuid/uuid.dart';
 
 import '../accounting/accounting_domain.dart';
+import '../auth/local_auth_domain.dart';
 import '../audit/audit_domain.dart';
 import '../ai/ai_domain.dart';
 import '../commerce/commerce_domain.dart';
@@ -43,6 +44,20 @@ class LocalSaleContext {
   final String terminalCode;
   final TaxMode taxMode;
   final String? preferredLocaleCode;
+}
+
+class LocalAuthenticatedSession {
+  const LocalAuthenticatedSession({
+    required this.context,
+    required this.identity,
+  });
+
+  final LocalSaleContext context;
+  final LocalSessionIdentity identity;
+
+  EmployeeRole get role => identity.role;
+  String get employeeName => identity.employeeName;
+  DateTime get expiresAt => identity.expiresAt;
 }
 
 class OfflineSaleResult {
@@ -97,7 +112,7 @@ class LocalPosDatabase {
     _db = await _factory.openDatabase(
       path,
       options: OpenDatabaseOptions(
-        version: 14,
+        version: 15,
         onConfigure: (db) async {
           await db.execute('PRAGMA foreign_keys = ON');
         },
@@ -323,6 +338,25 @@ class LocalPosDatabase {
               role TEXT NOT NULL,
               active INTEGER NOT NULL DEFAULT 1,
               created_at TEXT NOT NULL
+            )
+          ''');
+          await db.execute('''
+            CREATE TABLE employee_local_credential (
+              employee_id TEXT PRIMARY KEY REFERENCES employee(id),
+              pin_salt TEXT NOT NULL,
+              pin_hash TEXT NOT NULL,
+              iterations INTEGER NOT NULL,
+              failed_attempts INTEGER NOT NULL DEFAULT 0,
+              locked_until TEXT,
+              updated_at TEXT NOT NULL
+            )
+          ''');
+          await db.execute('''
+            CREATE TABLE active_local_session (
+              singleton_id INTEGER PRIMARY KEY CHECK (singleton_id = 1),
+              employee_id TEXT NOT NULL REFERENCES employee(id),
+              authenticated_at TEXT NOT NULL,
+              expires_at TEXT NOT NULL
             )
           ''');
           await db.execute('''
@@ -1112,6 +1146,27 @@ class LocalPosDatabase {
             await db.execute('''
               CREATE INDEX approval_request_status_time_idx
               ON approval_request (status, requested_at DESC)
+            ''');
+          }
+          if (oldVersion < 15) {
+            await db.execute('''
+              CREATE TABLE employee_local_credential (
+                employee_id TEXT PRIMARY KEY REFERENCES employee(id),
+                pin_salt TEXT NOT NULL,
+                pin_hash TEXT NOT NULL,
+                iterations INTEGER NOT NULL,
+                failed_attempts INTEGER NOT NULL DEFAULT 0,
+                locked_until TEXT,
+                updated_at TEXT NOT NULL
+              )
+            ''');
+            await db.execute('''
+              CREATE TABLE active_local_session (
+                singleton_id INTEGER PRIMARY KEY CHECK (singleton_id = 1),
+                employee_id TEXT NOT NULL REFERENCES employee(id),
+                authenticated_at TEXT NOT NULL,
+                expires_at TEXT NOT NULL
+              )
             ''');
           }
         },
@@ -2768,6 +2823,347 @@ class LocalPosDatabase {
       );
     });
     return employee;
+  }
+
+  LocalSaleContext _contextForEmployee(
+    LocalSaleContext base,
+    String employeeId,
+  ) {
+    return LocalSaleContext(
+      organizationId: base.organizationId,
+      businessId: base.businessId,
+      storeId: base.storeId,
+      terminalId: base.terminalId,
+      userId: employeeId,
+      businessName: base.businessName,
+      storeName: base.storeName,
+      terminalCode: base.terminalCode,
+      taxMode: base.taxMode,
+      preferredLocaleCode: base.preferredLocaleCode,
+    );
+  }
+
+  Future<bool> hasConfiguredLocalCredential(String employeeId) async {
+    final normalized = employeeId.trim();
+    if (normalized.isEmpty) return false;
+    final rows = await _database.query(
+      'employee_local_credential',
+      columns: ['employee_id'],
+      where: 'employee_id = ?',
+      whereArgs: [normalized],
+      limit: 1,
+    );
+    return rows.isNotEmpty;
+  }
+
+  Future<int> configuredLocalCredentialCount() async {
+    final rows = await _database.rawQuery(
+      'SELECT COUNT(*) AS count FROM employee_local_credential',
+    );
+    return (rows.single['count'] as int?) ?? 0;
+  }
+
+  Future<List<LocalEmployee>> listSignInEmployees() async {
+    final rows = await _database.rawQuery(
+      '''
+      SELECT e.*
+      FROM employee e
+      INNER JOIN employee_local_credential c ON c.employee_id = e.id
+      WHERE e.active = 1
+      ORDER BY e.name COLLATE NOCASE
+      ''',
+    );
+    return rows
+        .map(
+          (row) => LocalEmployee(
+            id: row['id']! as String,
+            name: row['name']! as String,
+            mobile: row['mobile_e164'] as String?,
+            role: employeeRoleFromValue(row['role']! as String),
+            active: (row['active']! as int) == 1,
+          ),
+        )
+        .toList();
+  }
+
+  Future<void> configureLocalPin({
+    required LocalSaleContext context,
+    required String employeeId,
+    required String pin,
+    int iterations = localPinIterations,
+    DateTime? now,
+  }) async {
+    if (!isValidLocalPin(pin)) {
+      throw ArgumentError('PIN must contain 4 to 8 digits');
+    }
+    final normalizedEmployeeId = employeeId.trim();
+    if (normalizedEmployeeId.isEmpty) {
+      throw ArgumentError('employeeId is required');
+    }
+    final occurredAt = (now ?? DateTime.now()).toUtc();
+    final salt = generateLocalPinSalt();
+    final hash = deriveLocalPinHash(
+      pin: pin,
+      salt: salt,
+      iterations: iterations,
+    );
+
+    await _database.transaction((txn) async {
+      final actors = await txn.query(
+        'employee',
+        columns: ['id', 'role', 'active'],
+        where: 'id = ? AND active = 1',
+        whereArgs: [context.userId],
+        limit: 1,
+      );
+      final targets = await txn.query(
+        'employee',
+        columns: ['id', 'role', 'active'],
+        where: 'id = ? AND active = 1',
+        whereArgs: [normalizedEmployeeId],
+        limit: 1,
+      );
+      if (actors.isEmpty || targets.isEmpty) {
+        throw StateError('Active employee not found');
+      }
+
+      final actorRole =
+          employeeRoleFromValue(actors.single['role']! as String);
+      final targetRole =
+          employeeRoleFromValue(targets.single['role']! as String);
+      final actorIsOwner = actorRole == EmployeeRole.owner;
+      final managerMayManageTarget = actorRole == EmployeeRole.manager &&
+          targetRole != EmployeeRole.owner &&
+          (targetRole != EmployeeRole.manager ||
+              normalizedEmployeeId == context.userId);
+      if (!actorIsOwner && !managerMayManageTarget) {
+        throw StateError('You do not have permission to configure this PIN');
+      }
+
+      await txn.insert(
+        'employee_local_credential',
+        {
+          'employee_id': normalizedEmployeeId,
+          'pin_salt': salt,
+          'pin_hash': hash,
+          'iterations': iterations,
+          'failed_attempts': 0,
+          'locked_until': null,
+          'updated_at': occurredAt.toIso8601String(),
+        },
+        conflictAlgorithm: ConflictAlgorithm.replace,
+      );
+      await txn.delete(
+        'active_local_session',
+        where: 'employee_id = ?',
+        whereArgs: [normalizedEmployeeId],
+      );
+      await _appendAuditEvent(
+        txn,
+        context: context,
+        action: 'identity.local_pin_configured',
+        entityType: 'employee',
+        entityId: normalizedEmployeeId,
+        occurredAt: occurredAt,
+        metadata: {'credentialType': 'local_pin'},
+      );
+    });
+  }
+
+  Future<LocalAuthenticatedSession> authenticateLocalEmployee({
+    required LocalSaleContext baseContext,
+    required String employeeId,
+    required String pin,
+    DateTime? now,
+    Duration sessionTtl = const Duration(hours: localSessionHours),
+  }) async {
+    if (sessionTtl <= Duration.zero ||
+        sessionTtl > const Duration(hours: 24)) {
+      throw ArgumentError('Local session TTL must be within 24 hours');
+    }
+    final normalizedEmployeeId = employeeId.trim();
+    final authenticatedAt = (now ?? DateTime.now()).toUtc();
+
+    final outcome = await _database.transaction<Object>((txn) async {
+      final employees = await txn.query(
+        'employee',
+        where: 'id = ? AND active = 1',
+        whereArgs: [normalizedEmployeeId],
+        limit: 1,
+      );
+      if (employees.isEmpty) {
+        return const LocalPinAuthException(code: 'EMPLOYEE_NOT_AVAILABLE');
+      }
+      final credentials = await txn.query(
+        'employee_local_credential',
+        where: 'employee_id = ?',
+        whereArgs: [normalizedEmployeeId],
+        limit: 1,
+      );
+      if (credentials.isEmpty) {
+        return const LocalPinAuthException(code: 'PIN_NOT_CONFIGURED');
+      }
+
+      final credential = credentials.single;
+      final lockedUntilRaw = credential['locked_until'] as String?;
+      final lockedUntil = lockedUntilRaw == null
+          ? null
+          : DateTime.tryParse(lockedUntilRaw)?.toUtc();
+      if (lockedUntil != null && authenticatedAt.isBefore(lockedUntil)) {
+        return LocalPinAuthException(
+          code: 'PIN_LOCKED',
+          lockedUntil: lockedUntil,
+        );
+      }
+
+      final valid = verifyLocalPin(
+        pin: pin,
+        salt: credential['pin_salt']! as String,
+        expectedHash: credential['pin_hash']! as String,
+        iterations: credential['iterations']! as int,
+      );
+      if (!valid) {
+        final failedAttempts =
+            (credential['failed_attempts']! as int) + 1;
+        final nextLockedUntil = localPinLockUntil(
+          failedAttempts: failedAttempts,
+          now: authenticatedAt,
+        );
+        await txn.update(
+          'employee_local_credential',
+          {
+            'failed_attempts': failedAttempts,
+            'locked_until': nextLockedUntil?.toIso8601String(),
+            'updated_at': authenticatedAt.toIso8601String(),
+          },
+          where: 'employee_id = ?',
+          whereArgs: [normalizedEmployeeId],
+        );
+        return LocalPinAuthException(
+          code: nextLockedUntil == null ? 'PIN_INCORRECT' : 'PIN_LOCKED',
+          lockedUntil: nextLockedUntil,
+        );
+      }
+
+      final expiresAt = authenticatedAt.add(sessionTtl);
+      await txn.update(
+        'employee_local_credential',
+        {
+          'failed_attempts': 0,
+          'locked_until': null,
+          'updated_at': authenticatedAt.toIso8601String(),
+        },
+        where: 'employee_id = ?',
+        whereArgs: [normalizedEmployeeId],
+      );
+      await txn.insert(
+        'active_local_session',
+        {
+          'singleton_id': 1,
+          'employee_id': normalizedEmployeeId,
+          'authenticated_at': authenticatedAt.toIso8601String(),
+          'expires_at': expiresAt.toIso8601String(),
+        },
+        conflictAlgorithm: ConflictAlgorithm.replace,
+      );
+
+      final employee = employees.single;
+      final identity = LocalSessionIdentity(
+        employeeId: normalizedEmployeeId,
+        employeeName: employee['name']! as String,
+        role: employeeRoleFromValue(employee['role']! as String),
+        authenticatedAt: authenticatedAt,
+        expiresAt: expiresAt,
+      );
+      final sessionContext =
+          _contextForEmployee(baseContext, normalizedEmployeeId);
+      await _appendAuditEvent(
+        txn,
+        context: sessionContext,
+        action: 'identity.local_session_started',
+        entityType: 'employee',
+        entityId: normalizedEmployeeId,
+        occurredAt: authenticatedAt,
+        metadata: {'credentialType': 'local_pin'},
+      );
+      return LocalAuthenticatedSession(
+        context: sessionContext,
+        identity: identity,
+      );
+    });
+
+    if (outcome is LocalPinAuthException) {
+      throw outcome;
+    }
+    return outcome as LocalAuthenticatedSession;
+  }
+
+  Future<LocalAuthenticatedSession?> restoreLocalSession({
+    required LocalSaleContext baseContext,
+    DateTime? now,
+  }) async {
+    final currentTime = (now ?? DateTime.now()).toUtc();
+    final rows = await _database.rawQuery(
+      '''
+      SELECT s.employee_id,
+             s.authenticated_at,
+             s.expires_at,
+             e.name,
+             e.role,
+             e.active
+      FROM active_local_session s
+      INNER JOIN employee e ON e.id = s.employee_id
+      WHERE s.singleton_id = 1
+      LIMIT 1
+      ''',
+    );
+    if (rows.isEmpty) return null;
+
+    final row = rows.single;
+    final expiresAt = DateTime.parse(row['expires_at']! as String).toUtc();
+    if ((row['active']! as int) != 1 ||
+        !currentTime.isBefore(expiresAt)) {
+      await _database.delete(
+        'active_local_session',
+        where: 'singleton_id = 1',
+      );
+      return null;
+    }
+
+    final employeeId = row['employee_id']! as String;
+    return LocalAuthenticatedSession(
+      context: _contextForEmployee(baseContext, employeeId),
+      identity: LocalSessionIdentity(
+        employeeId: employeeId,
+        employeeName: row['name']! as String,
+        role: employeeRoleFromValue(row['role']! as String),
+        authenticatedAt:
+            DateTime.parse(row['authenticated_at']! as String).toUtc(),
+        expiresAt: expiresAt,
+      ),
+    );
+  }
+
+  Future<void> endLocalSession({
+    required LocalSaleContext context,
+    DateTime? now,
+  }) async {
+    final occurredAt = (now ?? DateTime.now()).toUtc();
+    await _database.transaction((txn) async {
+      await txn.delete(
+        'active_local_session',
+        where: 'singleton_id = 1',
+      );
+      await _appendAuditEvent(
+        txn,
+        context: context,
+        action: 'identity.local_session_ended',
+        entityType: 'employee',
+        entityId: context.userId,
+        occurredAt: occurredAt,
+        metadata: {'reason': 'user_lock'},
+      );
+    });
   }
 
   Future<List<LocalEmployee>> listEmployees() async {

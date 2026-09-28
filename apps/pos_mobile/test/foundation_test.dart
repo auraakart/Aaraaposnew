@@ -28,16 +28,54 @@ void main() {
     await tester.tap(find.text('Create store'));
     await tester.pump();
 
+    late LocalSaleContext storeContext;
     await tester.runAsync(() async {
       for (var attempt = 0; attempt < 20; attempt++) {
-        if (await database.loadContext() != null) {
+        final context = await database.loadContext();
+        if (context != null) {
+          storeContext = context;
           return;
         }
         await Future<void>.delayed(const Duration(milliseconds: 10));
       }
       throw StateError('Store bootstrap did not complete');
     });
+    await tester.runAsync(
+      () => Future<void>.delayed(const Duration(milliseconds: 50)),
+    );
     await tester.pump();
+    await tester.runAsync(
+      () => Future<void>.delayed(const Duration(milliseconds: 100)),
+    );
+    await tester.pump();
+
+    expect(find.text('Create the Owner PIN'), findsOneWidget);
+    final pinFields = find.byType(TextField);
+    await tester.enterText(pinFields.first, '2468');
+    await tester.enterText(pinFields.last, '2468');
+    await tester.tap(find.text('Create PIN & continue'));
+    await tester.pump();
+
+    await tester.runAsync(() async {
+      for (var attempt = 0; attempt < 60; attempt++) {
+        final session = await database.restoreLocalSession(
+          baseContext: storeContext,
+        );
+        if (session != null) {
+          return;
+        }
+        await Future<void>.delayed(const Duration(milliseconds: 25));
+      }
+      throw StateError('Owner sign-in did not complete');
+    });
+    await tester.runAsync(
+      () => Future<void>.delayed(const Duration(milliseconds: 100)),
+    );
+    for (var attempt = 0;
+        attempt < 20 && find.text('Home').evaluate().isEmpty;
+        attempt++) {
+      await tester.pump(const Duration(milliseconds: 25));
+    }
 
     expect(find.text('Home'), findsOneWidget);
     expect(find.text('Sell'), findsOneWidget);

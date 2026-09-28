@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../accounting/accounting_export_screen.dart';
+import '../auth/local_access_screen.dart';
 import '../audit/audit_history_screen.dart';
 import '../commerce/commerce_orders_screen.dart';
 import '../diagnostics/diagnostics_screen.dart';
@@ -20,17 +21,43 @@ class MoreScreen extends StatelessWidget {
   const MoreScreen({
     required this.database,
     required this.saleContext,
+    this.onSessionInvalidated,
     super.key,
   });
 
   final LocalPosDatabase database;
   final LocalSaleContext saleContext;
+  final VoidCallback? onSessionInvalidated;
 
   @override
   Widget build(BuildContext context) {
     return ListView(
       padding: const EdgeInsets.all(16),
       children: [
+        Card(
+          child: ListTile(
+            leading: const Icon(Icons.manage_accounts_outlined),
+            title: const Text('Employee Access'),
+            subtitle: const Text(
+              'Set or reset local device PINs for employees',
+            ),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () {
+              Navigator.of(context).push(
+                MaterialPageRoute<void>(
+                  builder: (_) => Scaffold(
+                    appBar: AppBar(title: const Text('Employee Access')),
+                    body: LocalAccessScreen(
+                      database: database,
+                      saleContext: saleContext,
+                      onCurrentCredentialReset: onSessionInvalidated,
+                    ),
+                  ),
+                ),
+              );
+            },
+          ),
+        ),
         Card(
           child: ListTile(
             leading: const Icon(Icons.restore_outlined),

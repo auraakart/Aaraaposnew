@@ -1,11 +1,15 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 
+import 'auth/local_sign_in_screen.dart';
 import 'customers/customers_screen.dart';
 import 'intelligence/business_today_screen.dart';
 import 'inventory/stock_screen.dart';
 import 'l10n/app_strings.dart';
 import 'more/more_screen.dart';
+import 'operations/operations_domain.dart';
 import 'sell/bootstrap_screen.dart';
 import 'sell/local_pos_database.dart';
 import 'sell/sell_screen.dart';
@@ -93,7 +97,8 @@ class PosRoot extends StatefulWidget {
 }
 
 class _PosRootState extends State<PosRoot> {
-  LocalSaleContext? saleContext;
+  LocalSaleContext? baseContext;
+  LocalAuthenticatedSession? session;
   Object? loadError;
   var ready = false;
 
@@ -108,10 +113,16 @@ class _PosRootState extends State<PosRoot> {
       await widget.database.open();
       final context = await widget.database.loadContext();
       widget.localeController.loadPreferredCode(context?.preferredLocaleCode);
+      final restored = context == null
+          ? null
+          : await widget.database.restoreLocalSession(
+              baseContext: context,
+            );
       if (!mounted) return;
 
       setState(() {
-        saleContext = context;
+        baseContext = context;
+        session = restored;
         ready = true;
       });
     } on Object catch (error) {
@@ -122,6 +133,14 @@ class _PosRootState extends State<PosRoot> {
         });
       }
     }
+  }
+
+  Future<void> lockCurrentSession() async {
+    final active = session;
+    if (active == null) return;
+    await widget.database.endLocalSession(context: active.context);
+    if (!mounted) return;
+    setState(() => session = null);
   }
 
   @override
@@ -147,34 +166,85 @@ class _PosRootState extends State<PosRoot> {
       );
     }
 
-    final contextValue = saleContext;
+    final contextValue = baseContext;
     if (contextValue == null) {
       return BootstrapScreen(
         database: widget.database,
-        onComplete: (context) => setState(() => saleContext = context),
+        onComplete: (context) => setState(() {
+          baseContext = context;
+          session = null;
+        }),
       );
     }
 
-    return MainShell(database: widget.database, saleContext: contextValue);
+    final activeSession = session;
+    if (activeSession == null) {
+      return LocalSignInScreen(
+        database: widget.database,
+        baseContext: contextValue,
+        onAuthenticated: (next) => setState(() => session = next),
+      );
+    }
+
+    return MainShell(
+      database: widget.database,
+      session: activeSession,
+      onLock: () {
+        lockCurrentSession();
+      },
+    );
   }
 }
 
 class MainShell extends StatefulWidget {
   const MainShell({
     required this.database,
-    required this.saleContext,
+    required this.session,
+    required this.onLock,
     super.key,
   });
 
   final LocalPosDatabase database;
-  final LocalSaleContext saleContext;
+  final LocalAuthenticatedSession session;
+  final VoidCallback onLock;
+
+  LocalSaleContext get saleContext => session.context;
 
   @override
   State<MainShell> createState() => _MainShellState();
 }
 
 class _MainShellState extends State<MainShell> {
-  var index = 0;
+  late int index;
+  Timer? sessionTimer;
+
+  @override
+  void initState() {
+    super.initState();
+    index = switch (widget.session.role) {
+      EmployeeRole.cashier => 1,
+      EmployeeRole.stockWorker => 2,
+      _ => 0,
+    };
+    scheduleExpiry();
+  }
+
+  void scheduleExpiry() {
+    sessionTimer?.cancel();
+    final remaining =
+        widget.session.expiresAt.difference(DateTime.now().toUtc());
+    if (remaining <= Duration.zero) {
+      WidgetsBinding.instance.addPostFrameCallback((_) => widget.onLock());
+      return;
+    }
+    sessionTimer = Timer(remaining, widget.onLock);
+  }
+
+  @override
+  void dispose() {
+    sessionTimer?.cancel();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -217,15 +287,18 @@ class _MainShellState extends State<MainShell> {
       appBar: AppBar(
         title: Text(titles[index]),
         actions: [
-          Padding(
-            padding: const EdgeInsets.only(right: 12),
-            child: Center(
-              child: Text(
-                widget.saleContext.storeName,
-                style: Theme.of(context).textTheme.labelLarge,
-              ),
+          Center(
+            child: Text(
+              widget.session.employeeName,
+              style: Theme.of(context).textTheme.labelLarge,
             ),
           ),
+          IconButton(
+            tooltip: 'Lock / switch user',
+            onPressed: widget.onLock,
+            icon: const Icon(Icons.lock_outline),
+          ),
+          const SizedBox(width: 4),
         ],
       ),
       body: index == 0
@@ -248,6 +321,7 @@ class _MainShellState extends State<MainShell> {
                       : MoreScreen(
                           database: widget.database,
                           saleContext: widget.saleContext,
+                          onSessionInvalidated: widget.onLock,
                         ),
       bottomNavigationBar: NavigationBar(
         selectedIndex: index,
