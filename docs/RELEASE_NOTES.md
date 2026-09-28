@@ -1,5 +1,13 @@
 # Release Notes
 
+## V2.14 Approval Governance — validation
+
+Added request → approve/reject → one-time-consume approval governance, deterministic action fingerprints, expiry, requester/resolver separation of duties, Owner/Manager review UI, and high-value cashier refund approval/retry flow.
+
+Approval does not alter financial history by itself. Production remote notifications, authenticated server approval APIs and enterprise policy engines remain external boundaries.
+
+# Release Notes
+
 ## V2.13 Tax Governance Foundation — validation
 
 Added versioned/effective-dated tax-rule contracts, tenant-safe tax-rule persistence, HSN/SAC/other classification references, immutable sale-line tax snapshots, hold/resume preservation, and tax-evidence regression tests.
@@ -160,6 +168,7 @@ Not claimed:
 - tax filing gateways or regulatory certification
 - physical hardware certification
 - production credentials, hosting or deployment
+
 
 
 
