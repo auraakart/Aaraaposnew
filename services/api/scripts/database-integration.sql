@@ -136,18 +136,20 @@ SELECT set_config(
 DO $$
 DECLARE
   visible_count integer;
-  visible_id uuid;
+  expected_visible boolean;
 BEGIN
-  SELECT count(*), min(id)
-  INTO visible_count, visible_id
-  FROM business;
+  SELECT count(*) INTO visible_count FROM business;
+  SELECT EXISTS (
+    SELECT 1
+    FROM business
+    WHERE id = '00000000-0000-0000-0000-000000000201'::uuid
+  ) INTO expected_visible;
 
-  IF visible_count <> 1
-     OR visible_id <> '00000000-0000-0000-0000-000000000201'::uuid THEN
+  IF visible_count <> 1 OR NOT expected_visible THEN
     RAISE EXCEPTION
-      'Tenant RLS read isolation failed: count=%, id=%',
+      'Tenant RLS read isolation failed: count=%, expected_row_visible=%',
       visible_count,
-      visible_id;
+      expected_visible;
   END IF;
 END
 $$;
