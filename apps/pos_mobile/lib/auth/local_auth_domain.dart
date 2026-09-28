@@ -5,7 +5,6 @@ import 'dart:typed_data';
 import 'package:crypto/crypto.dart';
 
 import '../operations/operations_domain.dart';
-import '../sell/local_pos_database.dart';
 
 const localPinIterations = 40000;
 const localSessionHours = 12;
@@ -79,16 +78,16 @@ DateTime? localPinLockUntil({
   return now.toUtc().add(Duration(minutes: lockMinutes));
 }
 
-class LocalDeviceSession {
-  const LocalDeviceSession({
-    required this.context,
+class LocalSessionIdentity {
+  const LocalSessionIdentity({
+    required this.employeeId,
     required this.employeeName,
     required this.role,
     required this.authenticatedAt,
     required this.expiresAt,
   });
 
-  final LocalSaleContext context;
+  final String employeeId;
   final String employeeName;
   final EmployeeRole role;
   final DateTime authenticatedAt;
