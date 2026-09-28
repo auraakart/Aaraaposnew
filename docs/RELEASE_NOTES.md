@@ -1,5 +1,13 @@
 # Release Notes
 
+## V2.17 Android Build & Reproducibility Foundation — validation
+
+Added Flutter-generated Android platform files, committed npm/pub lockfiles, pinned Flutter 3.47.5 in CI, switched API installation to `npm ci`, enforced the Flutter lockfile, and added a real Android debug APK compile gate.
+
+Production signing, final Play Store application ID, physical-device validation and external distribution remain explicit release boundaries.
+
+# Release Notes
+
 ## V2.16 Role-Aware Workspace — validation
 
 Added least-privilege primary navigation and More-menu visibility driven by the authenticated employee role. Owner/Manager retain the full workspace, Cashier defaults to Sell with operational customer/checkout tools, and Stock Worker defaults to Stock with a minimal safe More menu.
@@ -184,6 +192,7 @@ Not claimed:
 - tax filing gateways or regulatory certification
 - physical hardware certification
 - production credentials, hosting or deployment
+
 
 
 
