@@ -41,13 +41,13 @@ void main() {
       throw StateError('Store bootstrap did not complete');
     });
     await tester.runAsync(
+      () => Future<void>.delayed(const Duration(milliseconds: 50)),
+    );
+    await tester.pump();
+    await tester.runAsync(
       () => Future<void>.delayed(const Duration(milliseconds: 100)),
     );
-    for (var attempt = 0;
-        attempt < 20 && find.text('Create the Owner PIN').evaluate().isEmpty;
-        attempt++) {
-      await tester.pump(const Duration(milliseconds: 25));
-    }
+    await tester.pump();
 
     expect(find.text('Create the Owner PIN'), findsOneWidget);
     final pinFields = find.byType(TextField);
