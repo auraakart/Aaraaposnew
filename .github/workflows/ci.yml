@@ -22,7 +22,7 @@ jobs:
         with:
           node-version: 22
           package-manager-cache: false
-      - run: npm install --no-audit --no-fund
+      - run: npm ci --no-audit --no-fund
       - run: npm audit --audit-level=high
       - run: npm run policy
       - run: npm run typecheck
@@ -38,11 +38,13 @@ jobs:
       - uses: actions/checkout@v7
       - uses: subosito/flutter-action@v2
         with:
+          flutter-version: 3.47.5
           channel: stable
           cache: true
-      - run: flutter pub get
+      - run: flutter pub get --enforce-lockfile
       - run: flutter analyze
       - run: flutter test
+      - run: flutter build apk --debug --no-pub
 
   baseline:
     name: Foundation baseline gate
@@ -53,39 +55,3 @@ jobs:
       - run: test -f services/api/db/migrations/0001_foundation.sql
 
 
-  platform-generate:
-    name: V2.17 platform generation
-    if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
-        with:
-          node-version: 22
-          package-manager-cache: false
-      - name: Generate npm lockfile
-        working-directory: services/api
-        run: npm install --package-lock-only --ignore-scripts --no-audit --no-fund
-      - uses: subosito/flutter-action@v2
-        with:
-          channel: stable
-          cache: true
-      - name: Generate Android project and Flutter lockfile
-        working-directory: apps/pos_mobile
-        run: |
-          flutter create --platforms=android --project-name aaraapos_pos --org com.auraakart .
-          flutter pub get
-      - name: Emit generated platform files
-        shell: bash
-        run: |
-          set -euo pipefail
-          {
-            printf '%s\n' services/api/package-lock.json
-            printf '%s\n' apps/pos_mobile/pubspec.lock
-            [ -f apps/pos_mobile/.metadata ] && printf '%s\n' apps/pos_mobile/.metadata
-            find apps/pos_mobile/android -type f -print | sort
-          } | while IFS= read -r file; do
-            printf '@@AARAAPOS_FILE:%s@@\n' "$file"
-            base64 -w0 "$file"
-            printf '\n@@AARAAPOS_END@@\n'
-          done
