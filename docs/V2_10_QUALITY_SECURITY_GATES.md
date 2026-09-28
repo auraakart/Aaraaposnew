@@ -92,21 +92,21 @@ Develop pushes continue to run the normal CI suite.
 
 ### Android build gate
 
-A true `flutter build apk` quality gate is **not** added in V2.10 because the repository currently does not contain a committed Android platform scaffold under `apps/pos_mobile/android`.
+**Closed by V2.17.**
 
-Adding an APK gate without the platform project would be a false claim.
+V2.17 committed the Flutter-generated Android platform scaffold and added a real `flutter build apk --debug --no-pub` CI gate.
 
-Android platform initialization, signing/build configuration and device build validation must be completed in a later explicit platform milestone.
+Production signing and physical-device validation remain separate release/integration work.
 
 ### Lockfile reproducibility
 
-The repository currently does not contain:
+**Closed by V2.17.**
+
+V2.17 committed:
 - `services/api/package-lock.json`
 - `apps/pos_mobile/pubspec.lock`
 
-V2.10 therefore does not claim fully reproducible dependency resolution.
-
-The policy prevents adding Node runtime dependencies without a lockfile, and dependency review/Dependabot reduce risk until lockfile/platform closure is performed deliberately.
+CI now uses `npm ci` and `flutter pub get --enforce-lockfile`.
 
 ## Boundary
 
