@@ -1,5 +1,13 @@
 # Release Notes
 
+## V2.15 Identity & Local Session Foundation — validation
+
+Added offline employee PIN sign-in, salted/iterated local PIN hashes, failed-attempt lockout, expiring/restorable terminal sessions, lock/switch-user UX, Owner/Manager employee PIN administration, role-aware landing screens, and an explicit server boundary that rejects local PINs as remote authentication credentials.
+
+Production identity-provider integration, OTP delivery, token signing, biometric/device attestation and cloud credential recovery remain external.
+
+# Release Notes
+
 ## V2.14 Approval Governance — validation
 
 Added request → approve/reject → one-time-consume approval governance, deterministic action fingerprints, expiry, requester/resolver separation of duties, Owner/Manager review UI, and high-value cashier refund approval/retry flow.
@@ -168,6 +176,7 @@ Not claimed:
 - tax filing gateways or regulatory certification
 - physical hardware certification
 - production credentials, hosting or deployment
+
 
 
 
