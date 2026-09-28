@@ -40,7 +40,11 @@ void main() {
       }
       throw StateError('Store bootstrap did not complete');
     });
-    await tester.pump();
+    for (var attempt = 0;
+        attempt < 20 && find.text('Create the Owner PIN').evaluate().isEmpty;
+        attempt++) {
+      await tester.pump(const Duration(milliseconds: 25));
+    }
 
     expect(find.text('Create the Owner PIN'), findsOneWidget);
     final pinFields = find.byType(TextField);
@@ -61,7 +65,11 @@ void main() {
       }
       throw StateError('Owner sign-in did not complete');
     });
-    await tester.pump();
+    for (var attempt = 0;
+        attempt < 20 && find.text('Home').evaluate().isEmpty;
+        attempt++) {
+      await tester.pump(const Duration(milliseconds: 25));
+    }
 
     expect(find.text('Home'), findsOneWidget);
     expect(find.text('Sell'), findsOneWidget);
