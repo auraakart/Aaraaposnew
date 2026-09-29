@@ -1,5 +1,13 @@
 # Release Notes
 
+## V2.20 API Edge Security Foundation — validation
+
+Added deny-by-default configurable CORS, strict JSON media-type handling, explicit 405/Allow contracts, no-store/browser hardening headers, bounded per-client in-process rate limiting with Retry-After, and Node request/header/keep-alive/header-count limits.
+
+The limiter intentionally uses the socket address rather than trusting X-Forwarded-For. Production gateway/WAF/distributed rate limiting and trusted proxy/TLS configuration remain external boundaries.
+
+# Release Notes
+
 ## V2.19 Authenticated API Surface Foundation — validation
 
 Added dependency-injected remote authentication, fail-closed protected HTTP routing, authenticated session introspection, scoped/RBAC-protected deterministic sale quote API, 256 KiB body limit, stable error envelopes, and API regression tests.
@@ -208,6 +216,7 @@ Not claimed:
 - tax filing gateways or regulatory certification
 - physical hardware certification
 - production credentials, hosting or deployment
+
 
 
 
