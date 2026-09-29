@@ -93,3 +93,20 @@ jobs:
           done
       - name: Verify schema and tenant RLS behavior
         run: psql -v ON_ERROR_STOP=1 -f services/api/scripts/database-integration.sql
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          package-manager-cache: false
+      - name: Install API dependencies
+        working-directory: services/api
+        run: npm ci --no-audit --no-fund
+      - name: Build API for runtime database test
+        working-directory: services/api
+        run: npm run build
+      - name: Verify Node runtime tenant transaction
+        working-directory: services/api
+        env:
+          AARAAPOS_DATABASE_INTEGRATION: "1"
+          DATABASE_URL: postgresql://aaraapos_runtime_test:runtime_test@127.0.0.1:5432/aaraapos_ci
+        run: node --test dist/test/database_runtime_integration.test.js
+

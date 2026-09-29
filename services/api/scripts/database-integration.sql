@@ -198,4 +198,16 @@ $$;
 
 RESET ROLE;
 
+CREATE ROLE aaraapos_runtime_test
+  LOGIN
+  PASSWORD 'runtime_test'
+  NOSUPERUSER
+  NOCREATEDB
+  NOCREATEROLE
+  NOINHERIT
+  NOBYPASSRLS;
+
+GRANT USAGE ON SCHEMA public TO aaraapos_runtime_test;
+GRANT SELECT, INSERT ON business TO aaraapos_runtime_test;
+
 SELECT 'PostgreSQL migration/RLS integration smoke test passed.' AS result;

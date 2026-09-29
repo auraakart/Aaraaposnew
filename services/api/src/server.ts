@@ -2,6 +2,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 
 import { allowedMethodsForPath, createApiHandler } from "./api.js";
 import { UnconfiguredRequestAuthenticator } from "./authenticator.js";
+import { createPostgresDatabaseFromEnvironment } from "./database.js";
 import {
   apiSecurityHeaders,
   evaluateCors,
@@ -26,6 +27,7 @@ const rateLimiter = new FixedWindowRateLimiter(120, 60_000, 10_000);
 const api = createApiHandler({
   authenticator: new UnconfiguredRequestAuthenticator()
 });
+const database = createPostgresDatabaseFromEnvironment(process.env);
 
 class PayloadTooLargeError extends Error {}
 
@@ -105,10 +107,7 @@ async function handleRequest(
     );
   });
 
-  if (
-    request.method === "GET" &&
-    (context.path === "/health" || context.path === "/ready")
-  ) {
+  if (request.method === "GET" && context.path === "/health") {
     writeJson(
       response,
       200,
@@ -116,6 +115,29 @@ async function handleRequest(
         requestId: context.requestId
       })
     );
+    return;
+  }
+
+  if (request.method === "GET" && context.path === "/ready") {
+    if (database === undefined) {
+      writeJson(response, 503, {
+        status: "not_ready",
+        service: "aaraapos-api",
+        scope: "dependencies",
+        dependencies: { database: "NOT_CONFIGURED" },
+        requestId: context.requestId
+      });
+      return;
+    }
+
+    const readiness = await database.readiness();
+    writeJson(response, readiness.ready ? 200 : 503, {
+      status: readiness.ready ? "ok" : "not_ready",
+      service: "aaraapos-api",
+      scope: "dependencies",
+      dependencies: { database: readiness.code },
+      requestId: context.requestId
+    });
     return;
   }
 
@@ -266,7 +288,8 @@ server.listen(port, "0.0.0.0", () => {
       details: {
         port,
         corsOriginCount: corsPolicy.allowedOrigins.size,
-        requestTimeoutMs: server.requestTimeout
+        requestTimeoutMs: server.requestTimeout,
+        databaseConfigured: database !== undefined
       }
     })
   );
