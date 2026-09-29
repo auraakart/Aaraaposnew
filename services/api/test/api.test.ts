@@ -197,6 +197,24 @@ test("auth failures fail closed with 401 or explicit 503", async () => {
   );
 });
 
+test("known resource rejects unsupported method with Allow header", async () => {
+  const api = createApiHandler({
+    authenticator: new FixedAuthenticator(cashier)
+  });
+
+  const response = await api.handle({
+    method: "POST",
+    path: "/v1/session",
+    bodyText: "{}",
+    requestId: "req-method",
+    now: new Date("2026-09-29T01:00:00Z")
+  });
+
+  assert.equal(response.statusCode, 405);
+  assert.equal(response.body.code, "METHOD_NOT_ALLOWED");
+  assert.equal(response.headers?.allow, "GET");
+});
+
 test("unknown route does not invoke protected business logic", async () => {
   const api = createApiHandler({
     authenticator: new FixedAuthenticator(cashier)
