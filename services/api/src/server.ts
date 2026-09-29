@@ -32,7 +32,7 @@ class PayloadTooLargeError extends Error {}
 function firstHeader(
   value: string | readonly string[] | undefined
 ): string | undefined {
-  return Array.isArray(value) ? value[0] : value;
+  return typeof value === "string" ? value : value?.[0];
 }
 
 function setHeaders(
@@ -157,6 +157,7 @@ async function handleRequest(
     }
 
     if (isKnownPreflight) {
+      response.removeHeader("content-type");
       response.setHeader(
         "allow",
         [...allowedMethods, "OPTIONS"].join(", ")
