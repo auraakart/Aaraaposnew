@@ -1,5 +1,13 @@
 # Release Notes
 
+## V2.18 PostgreSQL Migration & RLS Integration Gate — validation
+
+Added a PostgreSQL 16 CI service that applies the full ordered migration chain, asserts representative schema availability, automatically requires RLS plus policies on every tenant table with `organization_id`, and behaviorally verifies non-superuser cross-tenant read/write isolation.
+
+Production database hosting, deployment migration orchestration, pooling, load testing and zero-downtime certification remain external.
+
+# Release Notes
+
 ## V2.17 Android Build & Reproducibility Foundation — validation
 
 Added Flutter-generated Android platform files, committed npm/pub lockfiles, pinned Flutter 3.47.5 in CI, switched API installation to `npm ci`, enforced the Flutter lockfile, and added a real Android debug APK compile gate.
@@ -192,6 +200,7 @@ Not claimed:
 - tax filing gateways or regulatory certification
 - physical hardware certification
 - production credentials, hosting or deployment
+
 
 
 

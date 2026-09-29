@@ -55,3 +55,41 @@ jobs:
       - run: test -f services/api/db/migrations/0001_foundation.sql
 
 
+
+
+  database:
+    name: PostgreSQL migration & RLS gate
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: aaraapos_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d aaraapos_ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      PGHOST: 127.0.0.1
+      PGPORT: 5432
+      PGUSER: postgres
+      PGPASSWORD: postgres
+      PGDATABASE: aaraapos_ci
+    steps:
+      - uses: actions/checkout@v7
+      - name: Confirm PostgreSQL client
+        run: psql --version
+      - name: Apply migrations to clean PostgreSQL
+        run: |
+          set -euo pipefail
+          for migration in services/api/db/migrations/*.sql; do
+            echo "Applying ${migration}"
+            psql -v ON_ERROR_STOP=1 -f "${migration}"
+          done
+      - name: Verify schema and tenant RLS behavior
+        run: psql -v ON_ERROR_STOP=1 -f services/api/scripts/database-integration.sql

@@ -20,7 +20,7 @@ ALTER TABLE stock_movement
     )
   );
 
-DO $
+DO $$
 DECLARE
   direction_constraint text;
 BEGIN
@@ -39,7 +39,7 @@ BEGIN
       direction_constraint
     );
   END IF;
-END $;
+END $$;
 
 ALTER TABLE stock_movement
   ADD CONSTRAINT stock_movement_direction_check
