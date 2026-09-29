@@ -1,5 +1,13 @@
 # Release Notes
 
+## V2.19 Authenticated API Surface Foundation — validation
+
+Added dependency-injected remote authentication, fail-closed protected HTTP routing, authenticated session introspection, scoped/RBAC-protected deterministic sale quote API, 256 KiB body limit, stable error envelopes, and API regression tests.
+
+The production server intentionally returns AUTHENTICATION_UNAVAILABLE for protected routes until a real identity provider/token verifier is configured. No insecure identity headers or local PIN remote authentication were introduced.
+
+# Release Notes
+
 ## V2.18 PostgreSQL Migration & RLS Integration Gate — validation
 
 Added a PostgreSQL 16 CI service that applies the full ordered migration chain, asserts representative schema availability, automatically requires RLS plus policies on every tenant table with `organization_id`, and behaviorally verifies non-superuser cross-tenant read/write isolation.
@@ -200,6 +208,7 @@ Not claimed:
 - tax filing gateways or regulatory certification
 - physical hardware certification
 - production credentials, hosting or deployment
+
 
 
 
