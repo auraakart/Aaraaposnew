@@ -148,10 +148,17 @@ async function handleRequest(
     );
     setHeaders(response, rateLimitHeaders(rateDecision));
     if (!rateDecision.allowed) {
+      const retryAfterSeconds = Math.max(
+        1,
+        rateDecision.resetAtEpochSeconds -
+          Math.floor(Date.now() / 1000)
+      );
       writeJson(response, 429, {
         code: "RATE_LIMITED",
         message: "Too many requests.",
         requestId: context.requestId
+      }, {
+        "retry-after": String(retryAfterSeconds)
       });
       return;
     }
@@ -168,6 +175,26 @@ async function handleRequest(
     }
 
     const method = (request.method ?? "UNKNOWN").toUpperCase();
+    if (
+      allowedMethods.length > 0 &&
+      !allowedMethods.includes(method)
+    ) {
+      const result = await api.handle({
+        method,
+        path: context.path,
+        authorizationHeader: firstHeader(request.headers.authorization),
+        requestId: context.requestId,
+        now: new Date()
+      });
+      writeJson(
+        response,
+        result.statusCode,
+        result.body,
+        result.headers ?? {}
+      );
+      return;
+    }
+
     const methodAcceptsJsonBody =
       (method === "POST" || method === "PUT" || method === "PATCH") &&
       allowedMethods.includes(method);
