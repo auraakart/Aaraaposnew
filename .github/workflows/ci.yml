@@ -93,3 +93,26 @@ jobs:
           done
       - name: Verify schema and tenant RLS behavior
         run: psql -v ON_ERROR_STOP=1 -f services/api/scripts/database-integration.sql
+
+
+  v221-lock-generate:
+    name: V2.21 package lock generation
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: services/api
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          package-manager-cache: false
+      - name: Generate exact npm lockfile
+        run: npm install --package-lock-only --ignore-scripts --no-audit --no-fund
+      - name: Emit package lock
+        shell: bash
+        run: |
+          printf '@@AARAAPOS_LOCK@@\n'
+          base64 -w0 package-lock.json
+          printf '\n@@AARAAPOS_END@@\n'
