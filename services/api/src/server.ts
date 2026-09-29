@@ -1,7 +1,15 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 
-import { createApiHandler } from "./api.js";
+import { allowedMethodsForPath, createApiHandler } from "./api.js";
 import { UnconfiguredRequestAuthenticator } from "./authenticator.js";
+import {
+  apiSecurityHeaders,
+  evaluateCors,
+  FixedWindowRateLimiter,
+  isJsonContentType,
+  parseAllowedOrigins,
+  rateLimitHeaders
+} from "./edge_security.js";
 import {
   buildStructuredLog,
   createRequestContext,
@@ -11,11 +19,30 @@ import {
 
 const port = Number(process.env.PORT ?? 3000);
 const maxBodyBytes = 256 * 1024;
+const corsPolicy = {
+  allowedOrigins: parseAllowedOrigins(process.env.CORS_ALLOWED_ORIGINS)
+};
+const rateLimiter = new FixedWindowRateLimiter(120, 60_000, 10_000);
 const api = createApiHandler({
   authenticator: new UnconfiguredRequestAuthenticator()
 });
 
 class PayloadTooLargeError extends Error {}
+
+function firstHeader(
+  value: string | readonly string[] | undefined
+): string | undefined {
+  return Array.isArray(value) ? value[0] : value;
+}
+
+function setHeaders(
+  response: ServerResponse,
+  headers: Readonly<Record<string, string>>
+): void {
+  for (const [name, value] of Object.entries(headers)) {
+    response.setHeader(name, value);
+  }
+}
 
 async function readBody(
   request: IncomingMessage,
@@ -43,8 +70,10 @@ async function readBody(
 function writeJson(
   response: ServerResponse,
   statusCode: number,
-  body: Readonly<Record<string, unknown>>
+  body: Readonly<Record<string, unknown>>,
+  headers: Readonly<Record<string, string>> = {}
 ): void {
+  setHeaders(response, headers);
   response.statusCode = statusCode;
   response.end(JSON.stringify(body));
 }
@@ -53,15 +82,14 @@ async function handleRequest(
   request: IncomingMessage,
   response: ServerResponse
 ): Promise<void> {
-  const requestIdHeader = request.headers["x-request-id"];
+  const requestIdHeader = firstHeader(request.headers["x-request-id"]);
   const context = createRequestContext({
-    requestIdHeader: Array.isArray(requestIdHeader)
-      ? requestIdHeader[0]
-      : requestIdHeader,
+    requestIdHeader,
     method: request.method,
     url: request.url
   });
 
+  setHeaders(response, apiSecurityHeaders());
   response.setHeader("content-type", "application/json; charset=utf-8");
   response.setHeader("x-request-id", context.requestId);
 
@@ -91,20 +119,90 @@ async function handleRequest(
     return;
   }
 
+  const isVersionedApi = context.path.startsWith("/v1/");
+  const allowedMethods = allowedMethodsForPath(context.path);
+  const isKnownPreflight =
+    request.method === "OPTIONS" && allowedMethods.length > 0;
+
+  if (isVersionedApi) {
+    const cors = evaluateCors(
+      firstHeader(request.headers.origin),
+      corsPolicy,
+      isKnownPreflight
+    );
+    setHeaders(response, cors.headers);
+
+    if (!cors.allowed) {
+      writeJson(response, 403, {
+        code: "CORS_ORIGIN_DENIED",
+        message: "Browser origin is not allowed.",
+        requestId: context.requestId
+      });
+      return;
+    }
+
+    const clientAddress = request.socket.remoteAddress ?? "unknown";
+    const rateDecision = rateLimiter.check(
+      `${clientAddress}|${context.path}`,
+      Date.now()
+    );
+    setHeaders(response, rateLimitHeaders(rateDecision));
+    if (!rateDecision.allowed) {
+      writeJson(response, 429, {
+        code: "RATE_LIMITED",
+        message: "Too many requests.",
+        requestId: context.requestId
+      });
+      return;
+    }
+
+    if (isKnownPreflight) {
+      response.setHeader(
+        "allow",
+        [...allowedMethods, "OPTIONS"].join(", ")
+      );
+      response.statusCode = 204;
+      response.end();
+      return;
+    }
+
+    const method = (request.method ?? "UNKNOWN").toUpperCase();
+    const methodAcceptsJsonBody =
+      (method === "POST" || method === "PUT" || method === "PATCH") &&
+      allowedMethods.includes(method);
+
+    if (
+      methodAcceptsJsonBody &&
+      !isJsonContentType(firstHeader(request.headers["content-type"]))
+    ) {
+      writeJson(response, 415, {
+        code: "UNSUPPORTED_MEDIA_TYPE",
+        message: "Protected write requests require application/json.",
+        requestId: context.requestId
+      });
+      return;
+    }
+  }
+
   try {
     const bodyText = await readBody(request, maxBodyBytes);
-    const authorizationHeader = request.headers.authorization;
+    const authorizationHeader = firstHeader(
+      request.headers.authorization
+    );
     const result = await api.handle({
       method: (request.method ?? "UNKNOWN").toUpperCase(),
       path: context.path,
-      authorizationHeader: Array.isArray(authorizationHeader)
-        ? authorizationHeader[0]
-        : authorizationHeader,
+      authorizationHeader,
       bodyText,
       requestId: context.requestId,
       now: new Date()
     });
-    writeJson(response, result.statusCode, result.body);
+    writeJson(
+      response,
+      result.statusCode,
+      result.body,
+      result.headers ?? {}
+    );
   } catch (error) {
     if (error instanceof PayloadTooLargeError) {
       writeJson(response, 413, {
@@ -127,12 +225,21 @@ const server = createServer((request, response) => {
   void handleRequest(request, response);
 });
 
+server.requestTimeout = 15_000;
+server.headersTimeout = 10_000;
+server.keepAliveTimeout = 5_000;
+server.maxHeadersCount = 100;
+
 server.listen(port, "0.0.0.0", () => {
   writeStructuredLog(
     buildStructuredLog({
       level: "info",
       event: "api_started",
-      details: { port }
+      details: {
+        port,
+        corsOriginCount: corsPolicy.allowedOrigins.size,
+        requestTimeoutMs: server.requestTimeout
+      }
     })
   );
 });
