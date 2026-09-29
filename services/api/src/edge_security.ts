@@ -139,7 +139,7 @@ export function evaluateCors(
 
   let origin: string;
   try {
-    origin = new URL(originHeader).origin;
+    origin = normalizeOrigin(originHeader);
   } catch {
     return { allowed: false, headers: { vary: "Origin" } };
   }
