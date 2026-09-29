@@ -23,10 +23,17 @@ export interface ApiRequest {
 export interface ApiResponse {
   statusCode: number;
   body: Readonly<Record<string, unknown>>;
+  headers?: Readonly<Record<string, string>>;
 }
 
 export interface ApiHandler {
   handle(request: ApiRequest): Promise<ApiResponse>;
+}
+
+export function allowedMethodsForPath(path: string): readonly string[] {
+  if (path === "/v1/session") return ["GET"];
+  if (path === "/v1/sales/quote") return ["POST"];
+  return [];
 }
 
 class RequestValidationError extends Error {
@@ -238,6 +245,21 @@ export function createApiHandler(input: {
   return {
     async handle(request): Promise<ApiResponse> {
       try {
+        const allowedMethods = allowedMethodsForPath(request.path);
+        if (
+          allowedMethods.length > 0 &&
+          !allowedMethods.includes(request.method)
+        ) {
+          return {
+            statusCode: 405,
+            headers: { allow: allowedMethods.join(", ") },
+            body: {
+              code: "METHOD_NOT_ALLOWED",
+              message: "HTTP method is not allowed for this resource.",
+              requestId: request.requestId
+            }
+          };
+        }
         if (request.method === "GET" && request.path === "/v1/session") {
           const principal = await input.authenticator.authenticate({
             authorizationHeader: request.authorizationHeader,
