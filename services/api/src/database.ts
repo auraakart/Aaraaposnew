@@ -194,7 +194,6 @@ async function assertSafeRuntimeRole(
 
 export class PostgresRuntimeDatabase {
   private readonly pool: Pool;
-  private safeRoleVerified = false;
 
   constructor(config: RuntimeDatabaseConfig) {
     this.pool = new Pool(poolConfig(config));
@@ -209,7 +208,6 @@ export class PostgresRuntimeDatabase {
     try {
       client = await this.pool.connect();
       await assertSafeRuntimeRole(client);
-      this.safeRoleVerified = true;
 
       const schema = await client.query<{ organization_table: string | null }>(
         "SELECT to_regclass('public.organization')::text AS organization_table"
@@ -242,10 +240,7 @@ export class PostgresRuntimeDatabase {
       await client.query("BEGIN");
       began = true;
 
-      if (!this.safeRoleVerified) {
-        await assertSafeRuntimeRole(client);
-        this.safeRoleVerified = true;
-      }
+      await assertSafeRuntimeRole(client);
 
       await client.query(
         [
@@ -279,6 +274,14 @@ export class PostgresRuntimeDatabase {
       }
       throw error;
     } finally {
+      try {
+        await client.query("RESET ROLE");
+        await client.query("RESET app.organization_id");
+        await client.query("RESET app.business_id");
+        await client.query("RESET app.store_id");
+      } catch {
+        // A broken connection will be discarded/replaced by the pool.
+      }
       client.release();
     }
   }
